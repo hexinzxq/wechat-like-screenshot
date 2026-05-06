@@ -1,0 +1,132 @@
+.settings-shell {
+  min-height: 100vh;
+  padding: 28px;
+  background:
+    linear-gradient(180deg, rgba(50, 210, 150, 0.08), transparent 36%),
+    var(--bg);
+}
+
+.settings-header {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 28px;
+}
+
+.app-mark {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid rgba(50, 210, 150, 0.55);
+  border-radius: 8px;
+  background: rgba(50, 210, 150, 0.14);
+  color: var(--accent);
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+p,
+footer {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.settings-group {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.settings-group label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.shortcut-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+
+input {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: none;
+  background: #0c1012;
+  color: var(--text);
+}
+
+input:focus {
+  border-color: var(--accent);
+}
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  color: var(--text);
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+button.primary {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: #06110d;
+}
+
+.shortcut-preview {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+kbd {
+  min-width: 34px;
+  padding: 7px 10px;
+  border: 1px solid #3b474d;
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: #111719;
+  color: #dfe8eb;
+  text-align: center;
+  font-size: 12px;
+}
+
+.settings-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 18px;
+}

@@ -1,0 +1,159 @@
+html,
+body {
+  overflow: hidden;
+  background: transparent;
+}
+
+.overlay-root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  user-select: none;
+  cursor: crosshair;
+}
+
+.overlay-root.idle {
+  background: transparent;
+}
+
+.capture-image,
+.annotation-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+}
+
+.capture-image {
+  object-fit: fill;
+  pointer-events: none;
+}
+
+.annotation-canvas {
+  z-index: 4;
+}
+
+.mask {
+  position: absolute;
+  z-index: 2;
+  background: rgba(0, 0, 0, 0.46);
+  pointer-events: none;
+}
+
+.mask.top {
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.mask.left {
+  left: 0;
+}
+
+.mask.right {
+  right: 0;
+}
+
+.mask.bottom {
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.selection-box {
+  position: absolute;
+  z-index: 5;
+  border: 1px solid #32d296;
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.65),
+    0 0 0 1px rgba(50, 210, 150, 0.35);
+  pointer-events: none;
+}
+
+.toolbar {
+  position: absolute;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(16, 20, 22, 0.94);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  cursor: default;
+}
+
+.toolbar button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #eef4f5;
+}
+
+.toolbar button:hover,
+.toolbar button.active {
+  background: rgba(50, 210, 150, 0.18);
+  color: #32d296;
+}
+
+.toolbar .divider {
+  width: 1px;
+  height: 22px;
+  margin: 0 3px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.swatch span {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 50%;
+}
+
+.line-width {
+  width: 62px;
+  accent-color: #32d296;
+}
+
+.hint,
+.notice {
+  position: absolute;
+  z-index: 8;
+  left: 50%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(16, 20, 22, 0.88);
+  color: #eef4f5;
+  font-size: 13px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.hint {
+  top: 26px;
+}
+
+.notice {
+  bottom: 26px;
+}
+
+.text-draft {
+  position: absolute;
+  z-index: 9;
+  min-width: 120px;
+  height: 30px;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  border-radius: 4px;
+  outline: none;
+  background: rgba(0, 0, 0, 0.42);
+  font-size: 20px;
+}

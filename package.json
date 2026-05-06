@@ -1,0 +1,35 @@
+{
+  "name": "wechat-like-screenshot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.7.0",
+    "@tauri-apps/plugin-global-shortcut": "^2.3.0",
+    "lucide-react": "^0.468.0",
+    "next": "^15.4.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.7.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "browserslist": "^4.28.2",
+    "caniuse-lite": "^1.0.30001792",
+    "eslint": "^9.18.0",
+    "eslint-config-next": "^15.4.0",
+    "typescript": "^5.7.0"
+  },
+  "optionalDependencies": {
+    "@next/swc-win32-x64-msvc": "^15.5.15"
+  }
+}

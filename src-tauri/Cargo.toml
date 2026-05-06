@@ -1,0 +1,27 @@
+[package]
+name = "wechat-like-screenshot"
+version = "0.1.0"
+description = "A Windows screenshot utility built with Tauri, Next.js, and React"
+authors = ["Codex"]
+edition = "2021"
+
+[[bin]]
+name = "wechat-like-screenshot"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.6.1", features = [] }
+
+[dependencies]
+arboard = "3.4"
+base64 = "0.22"
+image = "0.24"
+rfd = "0.14"
+screenshots = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.6.1", features = ["tray-icon", "image-png"] }
+tauri-plugin-global-shortcut = "2.3"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2.3"
+thiserror = "1"
