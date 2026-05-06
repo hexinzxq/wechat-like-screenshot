@@ -148,9 +148,7 @@ async fn lock_overlay_window(
     origin_y: i32,
 ) -> Result<(), AppError> {
     if let Some(window) = app.get_webview_window("overlay") {
-        window.set_resizable(false)?;
-        window.set_size(PhysicalSize::new(width, height))?;
-        window.set_position(PhysicalPosition::new(origin_x, origin_y))?;
+        align_overlay_window(&window, width, height, origin_x, origin_y)?;
         let _ = window.set_content_protected(true);
     }
     Ok(())
@@ -252,10 +250,13 @@ fn capture_desktop() -> Result<CapturePayload, AppError> {
 
 fn show_overlay(app: &AppHandle, payload: CapturePayload) -> Result<(), AppError> {
     let window = ensure_overlay_window(app)?;
+    let width = payload.width;
+    let height = payload.height;
+    let origin_x = payload.origin_x;
+    let origin_y = payload.origin_y;
 
     window.hide()?;
-    window.set_size(PhysicalSize::new(payload.width, payload.height))?;
-    window.set_position(PhysicalPosition::new(payload.origin_x, payload.origin_y))?;
+    align_overlay_window(&window, width, height, origin_x, origin_y)?;
     let _ = window.set_content_protected(true);
     {
         let state = app.state::<CaptureState>();
@@ -268,6 +269,56 @@ fn show_overlay(app: &AppHandle, payload: CapturePayload) -> Result<(), AppError
     window.emit("capture-ready", payload)?;
     window.show()?;
     window.set_focus()?;
+    align_overlay_window(&window, width, height, origin_x, origin_y)?;
+    Ok(())
+}
+
+fn align_overlay_window(
+    window: &tauri::WebviewWindow,
+    width: u32,
+    height: u32,
+    origin_x: i32,
+    origin_y: i32,
+) -> Result<(), AppError> {
+    window.set_resizable(false)?;
+    window.set_size(PhysicalSize::new(width, height))?;
+    window.set_position(PhysicalPosition::new(origin_x, origin_y))?;
+
+    for _ in 0..3 {
+        let inner_size = window.inner_size()?;
+        let outer_size = window.outer_size()?;
+        let inner_position = window.inner_position()?;
+        let outer_position = window.outer_position()?;
+
+        let frame_width = outer_size.width.saturating_sub(inner_size.width);
+        let frame_height = outer_size.height.saturating_sub(inner_size.height);
+        let target_outer_width = width.saturating_add(frame_width);
+        let target_outer_height = height.saturating_add(frame_height);
+
+        if outer_size.width != target_outer_width || outer_size.height != target_outer_height {
+            window.set_size(PhysicalSize::new(target_outer_width, target_outer_height))?;
+        }
+
+        let offset_x = inner_position.x - outer_position.x;
+        let offset_y = inner_position.y - outer_position.y;
+        let target_outer_x = origin_x - offset_x;
+        let target_outer_y = origin_y - offset_y;
+
+        if outer_position.x != target_outer_x || outer_position.y != target_outer_y {
+            window.set_position(PhysicalPosition::new(target_outer_x, target_outer_y))?;
+        }
+
+        let aligned_size = window.inner_size()?;
+        let aligned_position = window.inner_position()?;
+        if aligned_size.width == width
+            && aligned_size.height == height
+            && aligned_position.x == origin_x
+            && aligned_position.y == origin_y
+        {
+            break;
+        }
+    }
+
     Ok(())
 }
 

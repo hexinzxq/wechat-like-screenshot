@@ -8,7 +8,7 @@
 wechat-like-screenshot-portable.exe
 ```
 
-免安装版本，双击即可运行。程序默认后台运行，托盘里可以打开设置或退出。
+免安装版本，双击即可运行。程序默认后台运行，可以在系统托盘里打开设置或退出。
 
 ```text
 wechat-like-screenshot-setup.exe
@@ -32,8 +32,8 @@ Windows 可能会提示未知发布者，因为这个演示程序没有做代码
 
 ```text
 wechat-like-screenshot-portable.exe
-AFC2E89C50044B10C78796F4A7CE4D1399DD645A2A85270A2E8EA03905482A6B
+0C987C0D9D5B0913E108FCE1D290007343FF11763ECE3A1A1FC1C677D2FE89EF
 
 wechat-like-screenshot-setup.exe
-75B03C30600BE69FF5765192E045A8A9A1B7D00B6DF6E081378A7A3603031B8A
+C299219F33BAC800F89268853535F34BCBF01A6C057BD190EE3B9757F7B0CC42
 ```
