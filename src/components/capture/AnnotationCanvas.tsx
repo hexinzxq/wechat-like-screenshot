@@ -214,6 +214,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
 
   function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
     if (!selection || tool === "select") return;
+    event.preventDefault();
     event.stopPropagation();
     const point = pointerPoint(event);
     if (!insideSelection(point, selection)) return;
@@ -237,6 +238,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
 
   function handlePointerMove(event: React.PointerEvent<HTMLCanvasElement>) {
     if (!drawing.current || !draft || !selection || draft.type === "text") return;
+    event.preventDefault();
     event.stopPropagation();
     const point = pointerPoint(event);
     const bounded = {
@@ -252,6 +254,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
 
   function handlePointerUp(event: React.PointerEvent<HTMLCanvasElement>) {
     if (!drawing.current) return;
+    event.preventDefault();
     event.stopPropagation();
     event.currentTarget.releasePointerCapture(event.pointerId);
     drawing.current = false;

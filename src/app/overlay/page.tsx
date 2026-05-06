@@ -37,6 +37,16 @@ export default function OverlayPage() {
   const canvasRef = useRef<AnnotationCanvasHandle | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
 
+  async function lockWindow(payload = capture) {
+    if (!payload) return;
+    await invoke("lock_overlay_window", {
+      width: payload.width,
+      height: payload.height,
+      originX: payload.originX,
+      originY: payload.originY
+    }).catch(() => undefined);
+  }
+
   useEffect(() => {
     if (!textDraft) return;
     window.requestAnimationFrame(() => textInputRef.current?.focus());
@@ -59,6 +69,7 @@ export default function OverlayPage() {
       const win = getCurrentWebviewWindow();
       await win.show();
       await win.setFocus();
+      await lockWindow(payload);
     };
     img.src = payload.imageDataUrl;
   }
@@ -99,6 +110,8 @@ export default function OverlayPage() {
   }
 
   function beginSelect(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    void lockWindow();
     if (tool !== "select") return;
     const current = point(event);
     canvasRef.current?.clear();
@@ -109,12 +122,14 @@ export default function OverlayPage() {
   }
 
   function moveSelect(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
     if (!dragStart || tool !== "select") return;
     const current = point(event);
     setSelection(normalizeRect(dragStart.x, dragStart.y, current.x, current.y));
   }
 
   function endSelect(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
     if (!dragStart) return;
     event.currentTarget.releasePointerCapture(event.pointerId);
     setDragStart(null);
@@ -176,7 +191,14 @@ export default function OverlayPage() {
   }
 
   return (
-    <main className="overlay-root" onPointerDown={beginSelect} onPointerMove={moveSelect} onPointerUp={endSelect}>
+    <main
+      className="overlay-root"
+      onDragStart={(event) => event.preventDefault()}
+      onContextMenu={(event) => event.preventDefault()}
+      onPointerDown={beginSelect}
+      onPointerMove={moveSelect}
+      onPointerUp={endSelect}
+    >
       <AnnotationCanvas
         ref={canvasRef}
         image={image}

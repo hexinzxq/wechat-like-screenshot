@@ -76,11 +76,12 @@ async fn run_capture(app: AppHandle) -> Result<(), AppError> {
     }
 
     if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.set_position(PhysicalPosition::new(-32000, -32000));
         let _ = window.hide();
         if let Ok(mut pending_capture) = state.pending_capture.lock() {
             pending_capture.take();
         }
-        std::thread::sleep(Duration::from_millis(90));
+        std::thread::sleep(Duration::from_millis(360));
     }
 
     let result = match tauri::async_runtime::spawn_blocking(capture_desktop).await {
@@ -132,7 +133,25 @@ async fn finish_capture(app: AppHandle) -> Result<(), AppError> {
         pending_capture.take();
     }
     if let Some(window) = app.get_webview_window("overlay") {
+        window.set_position(PhysicalPosition::new(-32000, -32000))?;
         window.hide()?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn lock_overlay_window(
+    app: AppHandle,
+    width: u32,
+    height: u32,
+    origin_x: i32,
+    origin_y: i32,
+) -> Result<(), AppError> {
+    if let Some(window) = app.get_webview_window("overlay") {
+        window.set_resizable(false)?;
+        window.set_size(PhysicalSize::new(width, height))?;
+        window.set_position(PhysicalPosition::new(origin_x, origin_y))?;
+        let _ = window.set_content_protected(true);
     }
     Ok(())
 }
@@ -237,6 +256,7 @@ fn show_overlay(app: &AppHandle, payload: CapturePayload) -> Result<(), AppError
     window.hide()?;
     window.set_size(PhysicalSize::new(payload.width, payload.height))?;
     window.set_position(PhysicalPosition::new(payload.origin_x, payload.origin_y))?;
+    let _ = window.set_content_protected(true);
     {
         let state = app.state::<CaptureState>();
         let mut pending_capture = state
@@ -264,6 +284,8 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, AppErr
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
+        .drag_and_drop(false)
+        .disable_drag_drop_handler()
         .visible(false)
         .build()?)
 }
@@ -345,6 +367,7 @@ fn main() {
             start_capture,
             set_shortcut,
             finish_capture,
+            lock_overlay_window,
             take_pending_capture,
             save_png_base64,
             copy_png_base64
