@@ -9,9 +9,9 @@ use std::{
 
 use arboard::{Clipboard, ImageData};
 use base64::{engine::general_purpose, Engine as _};
-use image::{DynamicImage, GenericImage, ImageBuffer, ImageOutputFormat, RgbaImage};
+use image::{imageops, DynamicImage, GenericImage, ImageBuffer, ImageOutputFormat, RgbaImage};
 use screenshots::Screen;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -19,6 +19,17 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::{
+    Foundation::POINT,
+    UI::{
+        Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT,
+        },
+        WindowsAndMessaging::{SetCursorPos, SetForegroundWindow, WindowFromPoint},
+    },
+};
 
 #[derive(Debug, thiserror::Error)]
 enum AppError {
@@ -56,6 +67,24 @@ struct CaptureState {
 #[serde(rename_all = "camelCase")]
 struct CapturePayload {
     image_data_url: String,
+    width: u32,
+    height: u32,
+    origin_x: i32,
+    origin_y: i32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LongCaptureRequest {
+    source_x: u32,
+    source_y: u32,
+    source_width: u32,
+    source_height: u32,
+    max_slices: Option<u32>,
+}
+
+struct DesktopCapture {
+    image: RgbaImage,
     width: u32,
     height: u32,
     origin_x: i32,
@@ -203,14 +232,52 @@ async fn copy_png_base64(png_base64: String) -> Result<(), AppError> {
     Ok(())
 }
 
+#[tauri::command]
+async fn capture_long_selection(
+    app: AppHandle,
+    request: LongCaptureRequest,
+) -> Result<CapturePayload, AppError> {
+    if let Some(window) = app.get_webview_window("overlay") {
+        window.set_position(PhysicalPosition::new(-32000, -32000))?;
+        window.hide()?;
+    }
+
+    match tauri::async_runtime::spawn_blocking(move || capture_long_area(request)).await {
+        Ok(result) => result,
+        Err(error) => Err(AppError::Message(format!("长截图任务失败：{error}"))),
+    }
+}
+
 fn capture_desktop() -> Result<CapturePayload, AppError> {
-    let screens = Screen::all().map_err(|error| AppError::Message(format!("读取屏幕失败：{error}")))?;
+    let capture = capture_desktop_image()?;
+    let image_data_url = encode_image_data_url(capture.image, ImageOutputFormat::Jpeg(86))?;
+
+    Ok(CapturePayload {
+        image_data_url,
+        width: capture.width,
+        height: capture.height,
+        origin_x: capture.origin_x,
+        origin_y: capture.origin_y,
+    })
+}
+
+fn capture_desktop_image() -> Result<DesktopCapture, AppError> {
+    let screens =
+        Screen::all().map_err(|error| AppError::Message(format!("读取屏幕失败：{error}")))?;
     if screens.is_empty() {
         return Err(AppError::Message("没有可用屏幕".into()));
     }
 
-    let min_x = screens.iter().map(|screen| screen.display_info.x).min().unwrap_or(0);
-    let min_y = screens.iter().map(|screen| screen.display_info.y).min().unwrap_or(0);
+    let min_x = screens
+        .iter()
+        .map(|screen| screen.display_info.x)
+        .min()
+        .unwrap_or(0);
+    let min_y = screens
+        .iter()
+        .map(|screen| screen.display_info.y)
+        .min()
+        .unwrap_or(0);
     let max_x = screens
         .iter()
         .map(|screen| screen.display_info.x + screen.display_info.width as i32)
@@ -235,18 +302,230 @@ fn capture_desktop() -> Result<CapturePayload, AppError> {
         canvas.copy_from(&image, x, y)?;
     }
 
-    let mut buffer = Cursor::new(Vec::new());
-    DynamicImage::ImageRgba8(canvas).write_to(&mut buffer, ImageOutputFormat::Jpeg(86))?;
-    let encoded = general_purpose::STANDARD.encode(buffer.into_inner());
-
-    Ok(CapturePayload {
-        image_data_url: format!("data:image/jpeg;base64,{encoded}"),
+    Ok(DesktopCapture {
+        image: canvas,
         width,
         height,
         origin_x: min_x,
         origin_y: min_y,
     })
 }
+
+fn encode_image_data_url(image: RgbaImage, format: ImageOutputFormat) -> Result<String, AppError> {
+    let mime = match format {
+        ImageOutputFormat::Png => "image/png",
+        ImageOutputFormat::Jpeg(_) => "image/jpeg",
+        _ => "image/png",
+    };
+    let mut buffer = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(image).write_to(&mut buffer, format)?;
+    let encoded = general_purpose::STANDARD.encode(buffer.into_inner());
+    Ok(format!("data:{mime};base64,{encoded}"))
+}
+
+fn capture_long_area(request: LongCaptureRequest) -> Result<CapturePayload, AppError> {
+    let width = request.source_width.clamp(80, 4096);
+    let height = request.source_height.clamp(80, 4096);
+    let max_slices = request.max_slices.unwrap_or(10).clamp(2, 18);
+
+    std::thread::sleep(Duration::from_millis(220));
+    let first_desktop = capture_desktop_image()?;
+    let mut previous = crop_desktop_area(
+        &first_desktop.image,
+        request.source_x,
+        request.source_y,
+        width,
+        height,
+    )?;
+    let mut stitched = previous.clone();
+
+    let cursor_x = first_desktop.origin_x + request.source_x as i32 + (width / 2) as i32;
+    let cursor_y = first_desktop.origin_y + request.source_y as i32 + (height / 2) as i32;
+    focus_window_at(cursor_x, cursor_y);
+
+    for _ in 1..max_slices {
+        scroll_down_at(cursor_x, cursor_y, scroll_notches_for_height(height));
+        std::thread::sleep(Duration::from_millis(520));
+
+        let desktop = capture_desktop_image()?;
+        let current = crop_desktop_area(
+            &desktop.image,
+            request.source_x,
+            request.source_y,
+            width,
+            height,
+        )?;
+
+        if images_are_similar(&previous, &current) {
+            break;
+        }
+
+        let overlap = find_vertical_overlap(&previous, &current);
+        append_slice(&mut stitched, &current, overlap)?;
+        previous = current;
+
+        if stitched.height() > 32000 {
+            break;
+        }
+    }
+
+    let image_data_url = encode_image_data_url(stitched.clone(), ImageOutputFormat::Png)?;
+    Ok(CapturePayload {
+        image_data_url,
+        width: stitched.width(),
+        height: stitched.height(),
+        origin_x: 0,
+        origin_y: 0,
+    })
+}
+
+fn crop_desktop_area(
+    image: &RgbaImage,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<RgbaImage, AppError> {
+    if x >= image.width() || y >= image.height() {
+        return Err(AppError::Message("长截图选区超出屏幕范围".into()));
+    }
+
+    let crop_width = width.min(image.width() - x).max(1);
+    let crop_height = height.min(image.height() - y).max(1);
+    Ok(imageops::crop_imm(image, x, y, crop_width, crop_height).to_image())
+}
+
+fn append_slice(base: &mut RgbaImage, slice: &RgbaImage, overlap: u32) -> Result<(), AppError> {
+    let skip = overlap.min(slice.height().saturating_sub(1));
+    let append_height = slice.height().saturating_sub(skip);
+    if append_height == 0 {
+        return Ok(());
+    }
+
+    let mut next = ImageBuffer::new(base.width(), base.height() + append_height);
+    next.copy_from(base, 0, 0)?;
+    let append_part = imageops::crop_imm(slice, 0, skip, slice.width(), append_height).to_image();
+    next.copy_from(&append_part, 0, base.height())?;
+    *base = next;
+    Ok(())
+}
+
+fn scroll_notches_for_height(height: u32) -> i32 {
+    ((height as f32 / 180.0).round() as i32).clamp(3, 7)
+}
+
+fn images_are_similar(previous: &RgbaImage, current: &RgbaImage) -> bool {
+    if previous.dimensions() != current.dimensions() {
+        return false;
+    }
+    sampled_diff(previous, current, 0, 0, previous.height()) < 2.5
+}
+
+fn find_vertical_overlap(previous: &RgbaImage, current: &RgbaImage) -> u32 {
+    let max_overlap = previous.height().min(current.height()).saturating_sub(24);
+    if max_overlap < 32 {
+        return 0;
+    }
+
+    let mut best_overlap = 0;
+    let mut best_score = f64::MAX;
+    let mut overlap = 32;
+    while overlap <= max_overlap {
+        let previous_start = previous.height() - overlap;
+        let score = sampled_diff(previous, current, previous_start, 0, overlap);
+        if score < best_score {
+            best_score = score;
+            best_overlap = overlap;
+        }
+        overlap += 4;
+    }
+
+    if best_score <= 18.0 {
+        best_overlap
+    } else {
+        0
+    }
+}
+
+fn sampled_diff(
+    previous: &RgbaImage,
+    current: &RgbaImage,
+    previous_y: u32,
+    current_y: u32,
+    height: u32,
+) -> f64 {
+    let width = previous.width().min(current.width());
+    let sample_x_step = (width / 96).max(1);
+    let sample_y_step = (height / 96).max(1);
+    let mut total = 0u64;
+    let mut count = 0u64;
+
+    let mut y = 0;
+    while y < height {
+        let py = previous_y + y;
+        let cy = current_y + y;
+        if py >= previous.height() || cy >= current.height() {
+            break;
+        }
+
+        let mut x = 0;
+        while x < width {
+            let a = previous.get_pixel(x, py).0;
+            let b = current.get_pixel(x, cy).0;
+            total += (a[0] as i32 - b[0] as i32).unsigned_abs() as u64;
+            total += (a[1] as i32 - b[1] as i32).unsigned_abs() as u64;
+            total += (a[2] as i32 - b[2] as i32).unsigned_abs() as u64;
+            count += 3;
+            x += sample_x_step;
+        }
+        y += sample_y_step;
+    }
+
+    if count == 0 {
+        f64::MAX
+    } else {
+        total as f64 / count as f64
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn focus_window_at(x: i32, y: i32) {
+    unsafe {
+        SetCursorPos(x, y);
+        let hwnd = WindowFromPoint(POINT { x, y });
+        if !hwnd.is_null() {
+            SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn focus_window_at(_x: i32, _y: i32) {}
+
+#[cfg(target_os = "windows")]
+fn scroll_down_at(x: i32, y: i32, notches: i32) {
+    unsafe {
+        SetCursorPos(x, y);
+        let wheel_delta = -120i32 * notches.max(1);
+        let input = INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: 0,
+                    dy: 0,
+                    mouseData: wheel_delta as u32,
+                    dwFlags: MOUSEEVENTF_WHEEL,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn scroll_down_at(_x: i32, _y: i32, _notches: i32) {}
 
 fn show_overlay(app: &AppHandle, payload: CapturePayload) -> Result<(), AppError> {
     let window = ensure_overlay_window(app)?;
@@ -327,18 +606,20 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, AppErr
         return Ok(window);
     }
 
-    Ok(WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("/overlay/".into()))
-        .title("截图")
-        .decorations(false)
-        .transparent(true)
-        .background_color(Color(0, 0, 0, 0))
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .resizable(false)
-        .drag_and_drop(false)
-        .disable_drag_drop_handler()
-        .visible(false)
-        .build()?)
+    Ok(
+        WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("/overlay/".into()))
+            .title("截图")
+            .decorations(false)
+            .transparent(true)
+            .background_color(Color(0, 0, 0, 0))
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .drag_and_drop(false)
+            .disable_drag_drop_handler()
+            .visible(false)
+            .build()?,
+    )
 }
 
 fn timestamp_millis() -> u128 {
@@ -395,14 +676,15 @@ fn build_tray(app: &mut tauri::App) -> Result<(), tauri::Error> {
 }
 
 fn register_capture_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), AppError> {
-    app.global_shortcut().on_shortcut(shortcut, |app, _shortcut, event| {
-        if event.state == ShortcutState::Pressed {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = run_capture(app).await;
-            });
-        }
-    })?;
+    app.global_shortcut()
+        .on_shortcut(shortcut, |app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = run_capture(app).await;
+                });
+            }
+        })?;
     Ok(())
 }
 
@@ -421,14 +703,14 @@ fn main() {
             lock_overlay_window,
             take_pending_capture,
             save_png_base64,
-            copy_png_base64
+            copy_png_base64,
+            capture_long_selection
         ])
         .setup(|app| {
             build_tray(app)?;
             ensure_overlay_window(app.handle())?;
             register_capture_shortcut(app.handle(), "Alt+A")?;
-            *app
-                .state::<CaptureState>()
+            *app.state::<CaptureState>()
                 .shortcut
                 .lock()
                 .map_err(|_| AppError::Message("快捷键状态初始化失败".into()))? = "Alt+A".into();

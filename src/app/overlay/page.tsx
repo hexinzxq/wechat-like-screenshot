@@ -13,6 +13,7 @@ import {
   PenLine,
   RectangleHorizontal,
   Save,
+  ScrollText,
   Type,
   Undo2,
   X
@@ -24,6 +25,15 @@ import "./overlay.css";
 
 const COLORS = ["#ff4d4f", "#32d296", "#ffd166", "#55a8ff", "#ffffff"];
 
+function insideRect(point: { x: number; y: number }, rect: Rect) {
+  return (
+    point.x >= rect.x &&
+    point.y >= rect.y &&
+    point.x <= rect.x + rect.width &&
+    point.y <= rect.y + rect.height
+  );
+}
+
 export default function OverlayPage() {
   const [capture, setCapture] = useState<CapturePayload | null>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
@@ -34,6 +44,8 @@ export default function OverlayPage() {
   const [lineWidth, setLineWidth] = useState(3);
   const [notice, setNotice] = useState("");
   const [textDraft, setTextDraft] = useState<{ x: number; y: number; value: string } | null>(null);
+  const [imageFrame, setImageFrame] = useState<Rect | null>(null);
+  const [longCapturing, setLongCapturing] = useState(false);
   const canvasRef = useRef<AnnotationCanvasHandle | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -52,20 +64,38 @@ export default function OverlayPage() {
     window.requestAnimationFrame(() => textInputRef.current?.focus());
   }, [textDraft]);
 
-  async function presentCapture(payload: CapturePayload) {
+  function longPreviewFrame(img: HTMLImageElement): Rect {
+    const maxWidth = Math.max(160, window.innerWidth - 64);
+    const maxHeight = Math.max(160, window.innerHeight - 120);
+    const scale = Math.min(maxWidth / img.naturalWidth, maxHeight / img.naturalHeight, 1);
+    const width = Math.max(1, Math.round(img.naturalWidth * scale));
+    const height = Math.max(1, Math.round(img.naturalHeight * scale));
+    return {
+      x: Math.round((window.innerWidth - width) / 2),
+      y: Math.max(24, Math.round((window.innerHeight - height) / 2) - 18),
+      width,
+      height
+    };
+  }
+
+  async function presentCapture(payload: CapturePayload, options?: { longPreview?: boolean }) {
     setCapture(null);
     setImage(null);
     setSelection(null);
     setDragStart(null);
     setTool("select");
     setTextDraft(null);
+    setImageFrame(null);
     setNotice("");
     canvasRef.current?.clear();
 
     const img = new Image();
     img.onload = async () => {
+      const frame = options?.longPreview ? longPreviewFrame(img) : null;
       setImage(img);
       setCapture(payload);
+      setImageFrame(frame);
+      if (frame) setSelection(frame);
       const win = getCurrentWebviewWindow();
       await win.show();
       await win.setFocus();
@@ -100,7 +130,7 @@ export default function OverlayPage() {
   const toolbarStyle = useMemo(() => {
     if (!selection) return undefined;
     const top = Math.min(window.innerHeight - 48, selection.y + selection.height + 8);
-    const maxLeft = Math.max(8, window.innerWidth - 560);
+    const maxLeft = Math.max(8, window.innerWidth - 640);
     const left = Math.min(maxLeft, Math.max(8, selection.x));
     return { left, top: Math.max(8, top) };
   }, [selection]);
@@ -114,6 +144,7 @@ export default function OverlayPage() {
     void lockWindow();
     if (tool !== "select") return;
     const current = point(event);
+    if (imageFrame && !insideRect(current, imageFrame)) return;
     canvasRef.current?.clear();
     setTextDraft(null);
     setDragStart(current);
@@ -149,6 +180,7 @@ export default function OverlayPage() {
       setDragStart(null);
       setTool("select");
       setTextDraft(null);
+      setImageFrame(null);
       canvasRef.current?.clear();
     }
   }
@@ -186,6 +218,47 @@ export default function OverlayPage() {
     await invoke("copy_png_base64", { pngBase64: dataUrlToBase64(dataUrl) });
   }
 
+  async function startLongCapture() {
+    if (!capture || !selection || imageFrame || longCapturing) return;
+    commitTextDraft();
+    canvasRef.current?.clear();
+    setLongCapturing(true);
+    setNotice("正在长截图...");
+
+    const scaleX = capture.width / Math.max(1, window.innerWidth);
+    const scaleY = capture.height / Math.max(1, window.innerHeight);
+    const request = {
+      sourceX: Math.max(0, Math.round(selection.x * scaleX)),
+      sourceY: Math.max(0, Math.round(selection.y * scaleY)),
+      sourceWidth: Math.max(80, Math.round(selection.width * scaleX)),
+      sourceHeight: Math.max(80, Math.round(selection.height * scaleY)),
+      maxSlices: 10
+    };
+
+    try {
+      const longPayload = await invoke<CapturePayload>("capture_long_selection", { request });
+      await presentCapture(
+        {
+          ...longPayload,
+          width: capture.width,
+          height: capture.height,
+          originX: capture.originX,
+          originY: capture.originY
+        },
+        { longPreview: true }
+      );
+      setNotice("长截图完成，可以继续标注、复制或保存");
+    } catch (error) {
+      const win = getCurrentWebviewWindow();
+      await win.show();
+      await win.setFocus();
+      await lockWindow();
+      setNotice(String(error || "长截图失败"));
+    } finally {
+      setLongCapturing(false);
+    }
+  }
+
   if (!capture) {
     return <div className="overlay-root idle" />;
   }
@@ -203,6 +276,7 @@ export default function OverlayPage() {
         ref={canvasRef}
         image={image}
         imageDataUrl={capture.imageDataUrl}
+        imageFrame={imageFrame}
         selection={selection}
         tool={tool}
         color={color}
@@ -277,6 +351,9 @@ export default function OverlayPage() {
             </button>
             <button title="清空标注" onClick={() => canvasRef.current?.clear()}>
               <Eraser size={17} />
+            </button>
+            <button title="长截图" disabled={longCapturing || !!imageFrame} onClick={startLongCapture}>
+              <ScrollText size={17} />
             </button>
             <button title="复制" onClick={copySelection}>
               <Clipboard size={17} />

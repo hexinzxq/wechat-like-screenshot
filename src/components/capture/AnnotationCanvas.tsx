@@ -16,6 +16,7 @@ export type AnnotationCanvasHandle = {
 type Props = {
   image: HTMLImageElement | null;
   imageDataUrl: string;
+  imageFrame?: Rect | null;
   selection: Rect | null;
   tool: AnnotationTool;
   color: string;
@@ -107,7 +108,7 @@ function shapeId() {
 }
 
 export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(function AnnotationCanvas(
-  { image, imageDataUrl, selection, tool, color, lineWidth, onTextPoint },
+  { image, imageDataUrl, imageFrame, selection, tool, color, lineWidth, onTextPoint },
   ref
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -147,12 +148,21 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
         if (!selection || !image) return null;
         const viewportWidth = Math.max(1, window.innerWidth);
         const viewportHeight = Math.max(1, window.innerHeight);
-        const scaleX = image.naturalWidth / viewportWidth;
-        const scaleY = image.naturalHeight / viewportHeight;
-        const sourceX = Math.round(selection.x * scaleX);
-        const sourceY = Math.round(selection.y * scaleY);
-        const sourceWidth = Math.max(1, Math.round(selection.width * scaleX));
-        const sourceHeight = Math.max(1, Math.round(selection.height * scaleY));
+        const frame = imageFrame ?? { x: 0, y: 0, width: viewportWidth, height: viewportHeight };
+        const clipped = {
+          x: Math.max(selection.x, frame.x),
+          y: Math.max(selection.y, frame.y),
+          width: Math.min(selection.x + selection.width, frame.x + frame.width) - Math.max(selection.x, frame.x),
+          height: Math.min(selection.y + selection.height, frame.y + frame.height) - Math.max(selection.y, frame.y)
+        };
+        if (clipped.width <= 0 || clipped.height <= 0) return null;
+
+        const scaleX = image.naturalWidth / frame.width;
+        const scaleY = image.naturalHeight / frame.height;
+        const sourceX = Math.round((clipped.x - frame.x) * scaleX);
+        const sourceY = Math.round((clipped.y - frame.y) * scaleY);
+        const sourceWidth = Math.max(1, Math.round(clipped.width * scaleX));
+        const sourceHeight = Math.max(1, Math.round(clipped.height * scaleY));
         const canvas = document.createElement("canvas");
         canvas.width = sourceWidth;
         canvas.height = sourceHeight;
@@ -174,7 +184,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
         ctx.rect(0, 0, sourceWidth, sourceHeight);
         ctx.clip();
         ctx.scale(scaleX, scaleY);
-        shapes.forEach((shape) => drawShape(ctx, shape, selection.x, selection.y));
+        shapes.forEach((shape) => drawShape(ctx, shape, clipped.x, clipped.y));
         ctx.restore();
         return canvas.toDataURL("image/png");
       },
@@ -201,7 +211,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
         setShapes([]);
       }
     }),
-    [image, selection, shapes]
+    [image, imageFrame, selection, shapes]
   );
 
   function pointerPoint(event: React.PointerEvent<HTMLCanvasElement>) {
@@ -274,7 +284,22 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
   return (
     <>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img className="capture-image" src={imageDataUrl} alt="" draggable={false} />
+      <img
+        className={`capture-image${imageFrame ? " framed" : ""}`}
+        src={imageDataUrl}
+        alt=""
+        draggable={false}
+        style={
+          imageFrame
+            ? {
+                left: imageFrame.x,
+                top: imageFrame.y,
+                width: imageFrame.width,
+                height: imageFrame.height
+              }
+            : undefined
+        }
+      />
       <canvas
         ref={canvasRef}
         className="annotation-canvas"
