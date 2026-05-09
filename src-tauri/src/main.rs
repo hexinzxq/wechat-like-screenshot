@@ -23,11 +23,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
     Foundation::{HWND, POINT},
-    UI::{
-        Input::KeyboardAndMouse::{
-            SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT,
-        },
-        WindowsAndMessaging::{SetCursorPos, SetForegroundWindow, WindowFromPoint},
+    UI::WindowsAndMessaging::{
+        PostMessageW, SetCursorPos, SetForegroundWindow, WindowFromPoint, WM_MOUSEWHEEL,
     },
 };
 
@@ -798,7 +795,6 @@ fn focus_hwnd(_hwnd: isize) {}
 #[cfg(target_os = "windows")]
 fn scroll_at_target(target_hwnd: isize, x: i32, y: i32, scroll_delta_y: i32) {
     unsafe {
-        SetCursorPos(x, y);
         let wheel_delta = wheel_delta_from_scroll(scroll_delta_y);
         let hwnd = isize_to_hwnd(target_hwnd);
         if !hwnd.is_null() {
@@ -809,7 +805,7 @@ fn scroll_at_target(target_hwnd: isize, x: i32, y: i32, scroll_delta_y: i32) {
         let notches = (wheel_delta.unsigned_abs() / 120).max(1) as i32;
 
         for index in 0..notches {
-            send_wheel_delta(direction * 120);
+            post_wheel_delta(hwnd, x, y, direction * 120);
             if index + 1 < notches {
                 std::thread::sleep(Duration::from_millis(28));
             }
@@ -821,21 +817,14 @@ fn scroll_at_target(target_hwnd: isize, x: i32, y: i32, scroll_delta_y: i32) {
 fn scroll_at_target(_target_hwnd: isize, _x: i32, _y: i32, _scroll_delta_y: i32) {}
 
 #[cfg(target_os = "windows")]
-unsafe fn send_wheel_delta(delta: i32) {
-    let input = INPUT {
-        r#type: INPUT_MOUSE,
-        Anonymous: INPUT_0 {
-            mi: MOUSEINPUT {
-                dx: 0,
-                dy: 0,
-                mouseData: delta as u32,
-                dwFlags: MOUSEEVENTF_WHEEL,
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    };
-    SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+unsafe fn post_wheel_delta(hwnd: HWND, screen_x: i32, screen_y: i32, delta: i32) {
+    if hwnd.is_null() {
+        return;
+    }
+
+    let wparam = ((delta as u16 as u32) << 16) as usize;
+    let lparam = (((screen_y as u16 as u32) << 16) | screen_x as u16 as u32) as isize;
+    PostMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam);
 }
 
 fn wheel_delta_from_scroll(scroll_delta_y: i32) -> i32 {
