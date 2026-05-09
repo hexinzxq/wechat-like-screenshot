@@ -57,6 +57,7 @@ export default function OverlayPage() {
   const [capture, setCapture] = useState<CapturePayload | null>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [selection, setSelection] = useState<Rect | null>(null);
+  const [hoverWindow, setHoverWindow] = useState<Rect | null>(null);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [tool, setTool] = useState<AnnotationTool>("select");
   const [color, setColor] = useState(COLORS[0]);
@@ -73,6 +74,7 @@ export default function OverlayPage() {
   const canvasRef = useRef<AnnotationCanvasHandle | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const selectionBeforeDragRef = useRef<Rect | null>(null);
+  const clickWindowRef = useRef<Rect | null>(null);
 
   async function lockWindow(payload = capture) {
     if (!payload) return;
@@ -122,8 +124,10 @@ export default function OverlayPage() {
     setCapture(payload);
     setImage(img);
     setSelection(frame);
+    setHoverWindow(null);
     setDragStart(null);
     selectionBeforeDragRef.current = null;
+    clickWindowRef.current = null;
     setTool("select");
     setTextDraft(null);
     setImageFrame(frame);
@@ -204,6 +208,37 @@ export default function OverlayPage() {
     return { x: event.clientX, y: event.clientY };
   }
 
+  function viewportWindowRect(rect: Rect): Rect | null {
+    if (!capture) return null;
+    const scaleX = window.innerWidth / Math.max(1, capture.width);
+    const scaleY = window.innerHeight / Math.max(1, capture.height);
+    const x = Math.round(rect.x * scaleX);
+    const y = Math.round(rect.y * scaleY);
+    const width = Math.round(rect.width * scaleX);
+    const height = Math.round(rect.height * scaleY);
+    if (width < 12 || height < 12) return null;
+    return {
+      x: Math.max(0, x),
+      y: Math.max(0, y),
+      width: Math.min(window.innerWidth - Math.max(0, x), width),
+      height: Math.min(window.innerHeight - Math.max(0, y), height)
+    };
+  }
+
+  function windowCandidateAt(current: { x: number; y: number }) {
+    if (!capture?.windows?.length || selection || dragStart || tool !== "select" || longMode || imageFrame) {
+      return null;
+    }
+
+    return (
+      capture.windows
+        .map(viewportWindowRect)
+        .filter((rect): rect is Rect => rect !== null)
+        .filter((rect) => insideRect(current, rect))
+        .sort((a, b) => a.width * a.height - b.width * b.height)[0] ?? null
+    );
+  }
+
   function beginSelect(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
     if (longMode || tool !== "select") return;
@@ -213,6 +248,8 @@ export default function OverlayPage() {
     void lockWindow();
     if (!imageFrame) canvasRef.current?.clear();
     setTextDraft(null);
+    clickWindowRef.current = hoverWindow ?? windowCandidateAt(raw);
+    setHoverWindow(null);
     selectionBeforeDragRef.current = selection;
     setDragStart(current);
     setSelection({ x: current.x, y: current.y, width: 0, height: 0 });
@@ -220,9 +257,14 @@ export default function OverlayPage() {
   }
 
   function moveSelect(event: React.PointerEvent<HTMLDivElement>) {
+    const raw = point(event);
+    if (!dragStart) {
+      setHoverWindow(windowCandidateAt(raw));
+      return;
+    }
+
     event.preventDefault();
     if (longMode || !dragStart || tool !== "select") return;
-    const raw = point(event);
     const current = imageFrame ? clampPointToRect(raw, imageFrame) : raw;
     setSelection(normalizeRect(dragStart.x, dragStart.y, current.x, current.y));
   }
@@ -231,12 +273,17 @@ export default function OverlayPage() {
     event.preventDefault();
     if (longMode || !dragStart) return;
     event.currentTarget.releasePointerCapture(event.pointerId);
+    const raw = point(event);
+    const distance = Math.hypot(raw.x - dragStart.x, raw.y - dragStart.y);
+    const clickedWindow = distance <= 4 && !imageFrame ? clickWindowRef.current : null;
     setDragStart(null);
     setSelection((rect) => {
+      if (clickedWindow) return clickedWindow;
       if (rect && rect.width > 8 && rect.height > 8) return rect;
       return imageFrame ? selectionBeforeDragRef.current ?? imageFrame : null;
     });
     selectionBeforeDragRef.current = null;
+    clickWindowRef.current = null;
   }
 
   async function closeOverlay() {
@@ -250,7 +297,9 @@ export default function OverlayPage() {
       setCapture(null);
       setImage(null);
       setSelection(null);
+      setHoverWindow(null);
       setDragStart(null);
+      clickWindowRef.current = null;
       setTool("select");
       setTextDraft(null);
       setImageFrame(null);
@@ -317,6 +366,7 @@ export default function OverlayPage() {
 
     commitTextDraft();
     canvasRef.current?.clear();
+    setHoverWindow(null);
     setLongMode(true);
     setAutoLongCapture(false);
     setLongProgress(null);
@@ -449,6 +499,13 @@ export default function OverlayPage() {
           setTextDraft({ x: textPoint.x, y: textPoint.y, value: "" });
         }}
       />
+
+      {!selection && hoverWindow && (
+        <div
+          className="window-candidate-box"
+          style={{ left: hoverWindow.x, top: hoverWindow.y, width: hoverWindow.width, height: hoverWindow.height }}
+        />
+      )}
 
       {selection && (
         <>
@@ -602,7 +659,7 @@ export default function OverlayPage() {
         />
       )}
 
-      {!selection && <div className="hint">拖拽框选截图区域，按 Esc 取消</div>}
+      {!selection && <div className="hint">移动鼠标识别窗口，单击选中窗口，拖动框选区域，按 Esc 取消</div>}
       {notice && (
         <div className="notice">
           {notice}

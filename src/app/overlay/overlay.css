@@ -148,6 +148,17 @@ body {
   pointer-events: none;
 }
 
+.window-candidate-box {
+  position: absolute;
+  z-index: 5;
+  border: 2px solid #32d296;
+  background: rgba(50, 210, 150, 0.08);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.72),
+    0 0 0 1px rgba(238, 244, 245, 0.45);
+  pointer-events: none;
+}
+
 .toolbar {
   position: absolute;
   z-index: 8;

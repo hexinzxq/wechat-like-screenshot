@@ -22,12 +22,16 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
-    Foundation::{HWND, POINT},
+    Foundation::{BOOL, HWND, LPARAM, POINT, RECT},
+    Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS},
     UI::{
         Input::KeyboardAndMouse::{
             SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT,
         },
-        WindowsAndMessaging::{GetCursorPos, SetCursorPos, SetForegroundWindow, WindowFromPoint},
+        WindowsAndMessaging::{
+            EnumWindows, GetCursorPos, GetWindowRect, IsIconic, IsWindowVisible, SetCursorPos,
+            SetForegroundWindow, WindowFromPoint,
+        },
     },
 };
 
@@ -72,6 +76,16 @@ struct CapturePayload {
     height: u32,
     origin_x: i32,
     origin_y: i32,
+    windows: Vec<CaptureWindow>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CaptureWindow {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -462,6 +476,7 @@ async fn finish_long_capture(
         height: session.stitched.height(),
         origin_x: 0,
         origin_y: 0,
+        windows: Vec::new(),
     })
 }
 
@@ -477,6 +492,12 @@ async fn cancel_long_capture(state: tauri::State<'_, CaptureState>) -> Result<()
 
 fn capture_desktop() -> Result<CapturePayload, AppError> {
     let capture = capture_desktop_image()?;
+    let windows = detect_capture_windows(
+        capture.origin_x,
+        capture.origin_y,
+        capture.width,
+        capture.height,
+    );
     let image_data_url = encode_image_data_url(capture.image, ImageOutputFormat::Jpeg(86))?;
 
     Ok(CapturePayload {
@@ -485,6 +506,7 @@ fn capture_desktop() -> Result<CapturePayload, AppError> {
         height: capture.height,
         origin_x: capture.origin_x,
         origin_y: capture.origin_y,
+        windows,
     })
 }
 
@@ -570,6 +592,99 @@ fn normalize_long_request(request: LongCaptureRequest) -> LongCaptureRequest {
         source_height: request.source_height.clamp(80, 4096),
         max_slices: Some(request.max_slices.unwrap_or(60).clamp(2, 120)),
     }
+}
+
+#[cfg(target_os = "windows")]
+fn detect_capture_windows(
+    origin_x: i32,
+    origin_y: i32,
+    desktop_width: u32,
+    desktop_height: u32,
+) -> Vec<CaptureWindow> {
+    let mut raw_windows: Vec<RECT> = Vec::new();
+    unsafe {
+        EnumWindows(
+            Some(enum_capture_window),
+            &mut raw_windows as *mut Vec<RECT> as LPARAM,
+        );
+    }
+
+    let desktop_right = origin_x + desktop_width as i32;
+    let desktop_bottom = origin_y + desktop_height as i32;
+    raw_windows
+        .into_iter()
+        .filter_map(|rect| {
+            let left = rect.left.max(origin_x);
+            let top = rect.top.max(origin_y);
+            let right = rect.right.min(desktop_right);
+            let bottom = rect.bottom.min(desktop_bottom);
+            let width = right - left;
+            let height = bottom - top;
+            if width < 60 || height < 40 {
+                return None;
+            }
+
+            Some(CaptureWindow {
+                x: left - origin_x,
+                y: top - origin_y,
+                width: width as u32,
+                height: height as u32,
+            })
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn detect_capture_windows(
+    _origin_x: i32,
+    _origin_y: i32,
+    _desktop_width: u32,
+    _desktop_height: u32,
+) -> Vec<CaptureWindow> {
+    Vec::new()
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn enum_capture_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    if hwnd.is_null() || IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 {
+        return 1;
+    }
+
+    let mut cloaked = 0u32;
+    let cloaked_result = DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_CLOAKED as u32,
+        &mut cloaked as *mut u32 as *mut _,
+        std::mem::size_of::<u32>() as u32,
+    );
+    if cloaked_result >= 0 && cloaked != 0 {
+        return 1;
+    }
+
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let bounds_result = DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_EXTENDED_FRAME_BOUNDS as u32,
+        &mut rect as *mut RECT as *mut _,
+        std::mem::size_of::<RECT>() as u32,
+    );
+    if bounds_result < 0 && GetWindowRect(hwnd, &mut rect) == 0 {
+        return 1;
+    }
+
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width >= 60 && height >= 40 {
+        let windows = &mut *(lparam as *mut Vec<RECT>);
+        windows.push(rect);
+    }
+
+    1
 }
 
 fn set_overlay_ignore_cursor(app: &AppHandle, ignore: bool) -> Result<(), AppError> {

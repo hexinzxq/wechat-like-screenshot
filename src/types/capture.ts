@@ -11,6 +11,7 @@ export type CapturePayload = {
   height: number;
   originX: number;
   originY: number;
+  windows?: Rect[];
 };
 
 export type AnnotationTool =
