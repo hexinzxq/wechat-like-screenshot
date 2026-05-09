@@ -163,7 +163,7 @@ export default function OverlayPage() {
     if (!longMode || !autoLongCapture) return;
     const timer = window.setInterval(() => {
       void stepLongCapture(120);
-    }, 380);
+    }, 320);
     return () => window.clearInterval(timer);
   }, [longMode, autoLongCapture, longBusy]);
 
@@ -320,7 +320,6 @@ export default function OverlayPage() {
       });
       setLongProgress(progress);
       if (!progress.changed) {
-        setAutoLongCapture(false);
         setNotice("没有检测到可靠的新内容，可以点完成结束");
       } else {
         setNotice(`长截图中：已拼接 ${progress.slices} 屏`);
@@ -376,7 +375,8 @@ export default function OverlayPage() {
     event.preventDefault();
     event.stopPropagation();
     if (event.deltaY < 0) {
-      setNotice("长截图只向下拼接，向下滚动继续");
+      setNotice("已向上滚动，向下滚动时继续拼接");
+      void stepLongCapture(event.deltaY);
       return;
     }
     void stepLongCapture(event.deltaY || 120);

@@ -92,6 +92,7 @@ struct LongCaptureSession {
     cursor_y: i32,
     target_hwnd: isize,
     slices: u32,
+    no_change_count: u32,
 }
 
 #[derive(Serialize)]
@@ -316,6 +317,7 @@ async fn begin_long_capture_selection(
         cursor_y,
         target_hwnd,
         slices: 1,
+        no_change_count: 0,
     });
 
     Ok(progress)
@@ -328,17 +330,35 @@ async fn step_long_capture(
 ) -> Result<LongCaptureProgress, AppError> {
     let state = app.state::<CaptureState>();
     if scroll_delta_y < 0 {
-        let session = state
-            .long_session
-            .lock()
-            .map_err(|_| AppError::Message("长截图状态读取失败".into()))?;
-        let Some(session) = session.as_ref() else {
-            return Err(AppError::Message("长截图尚未开始".into()));
+        let (cursor_x, cursor_y, target_hwnd, slices, width, height) = {
+            let session = state
+                .long_session
+                .lock()
+                .map_err(|_| AppError::Message("长截图状态读取失败".into()))?;
+            let Some(session) = session.as_ref() else {
+                return Err(AppError::Message("长截图尚未开始".into()));
+            };
+            (
+                session.cursor_x,
+                session.cursor_y,
+                session.target_hwnd,
+                session.slices,
+                session.stitched.width(),
+                session.stitched.height(),
+            )
         };
+        set_overlay_ignore_cursor(&app, true)?;
+        let scroll_result = tauri::async_runtime::spawn_blocking(move || {
+            scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
+            std::thread::sleep(Duration::from_millis(120));
+        })
+        .await;
+        let _ = set_overlay_ignore_cursor(&app, false);
+        scroll_result.map_err(|error| AppError::Message(format!("长截图滚动失败：{error}")))?;
         return Ok(LongCaptureProgress {
-            slices: session.slices,
-            width: session.stitched.width(),
-            height: session.stitched.height(),
+            slices,
+            width,
+            height,
             changed: false,
             finished: false,
         });
@@ -364,7 +384,7 @@ async fn step_long_capture(
     let capture_result = tauri::async_runtime::spawn_blocking(move || {
         if scroll_delta_y != 0 {
             scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
-            std::thread::sleep(Duration::from_millis(420));
+            std::thread::sleep(Duration::from_millis(260));
         } else {
             std::thread::sleep(Duration::from_millis(120));
         }
@@ -397,12 +417,19 @@ async fn step_long_capture(
             append_slice(&mut session.stitched, &current, scroll_offset)?;
             session.previous = current;
             session.slices += 1;
+            session.no_change_count = 0;
             changed = true;
+        } else {
+            session.no_change_count += 1;
         }
+    } else {
+        session.no_change_count += 1;
     }
 
     let max_slices = session.request.max_slices.unwrap_or(30).clamp(2, 60);
-    let finished = !changed || session.slices >= max_slices || session.stitched.height() > 48000;
+    let finished = session.no_change_count >= 6
+        || session.slices >= max_slices
+        || session.stitched.height() > 48000;
 
     Ok(LongCaptureProgress {
         slices: session.slices,
@@ -602,7 +629,7 @@ fn find_downward_scroll_offset(previous: &RgbaImage, current: &RgbaImage) -> Opt
         shift += 2;
     }
 
-    if best_score <= 14.0 {
+    if best_score <= 24.0 {
         Some(best_shift)
     } else {
         None
