@@ -104,6 +104,7 @@ struct LongCaptureProgress {
     height: u32,
     changed: bool,
     finished: bool,
+    preview_image_data_url: Option<String>,
 }
 
 struct DesktopCapture {
@@ -301,12 +302,14 @@ async fn begin_long_capture_selection(
     let (first, cursor_x, cursor_y, target_hwnd) = capture_result
         .map_err(|error| AppError::Message(format!("长截图初始化失败：{error}")))??;
 
+    let preview_image_data_url = Some(encode_long_preview_data_url(&first)?);
     let progress = LongCaptureProgress {
         slices: 1,
         width: first.width(),
         height: first.height(),
         changed: true,
         finished: false,
+        preview_image_data_url,
     };
 
     let state = app.state::<CaptureState>();
@@ -385,7 +388,8 @@ async fn step_long_capture(
     if !images_are_similar(&session.previous, &current) {
         if scroll_delta_y < 0 {
             if let Some(scroll_offset) = find_upward_scroll_offset(&session.previous, &current) {
-                prepend_slice(&mut session.stitched, &current, scroll_offset)?;
+                let (fixed_top, _) = fixed_edge_bands(&session.previous, &current);
+                prepend_slice(&mut session.stitched, &current, scroll_offset, fixed_top)?;
                 session.previous = current;
                 session.slices += 1;
                 session.stalled_count = 0;
@@ -396,7 +400,8 @@ async fn step_long_capture(
             }
         } else if let Some(scroll_offset) = find_downward_scroll_offset(&session.previous, &current)
         {
-            append_slice(&mut session.stitched, &current, scroll_offset)?;
+            let (_, fixed_bottom) = fixed_edge_bands(&session.previous, &current);
+            append_slice(&mut session.stitched, &current, scroll_offset, fixed_bottom)?;
             session.previous = current;
             session.slices += 1;
             session.stalled_count = 0;
@@ -418,6 +423,11 @@ async fn step_long_capture(
         height: session.stitched.height(),
         changed,
         finished,
+        preview_image_data_url: if changed {
+            Some(encode_long_preview_data_url(&session.stitched)?)
+        } else {
+            None
+        },
     })
 }
 
@@ -527,6 +537,18 @@ fn encode_image_data_url(image: RgbaImage, format: ImageOutputFormat) -> Result<
     Ok(format!("data:{mime};base64,{encoded}"))
 }
 
+fn encode_long_preview_data_url(image: &RgbaImage) -> Result<String, AppError> {
+    let max_width = 260;
+    let max_height = 520;
+    let scale =
+        (max_width as f32 / image.width() as f32).min(max_height as f32 / image.height() as f32);
+    let scale = scale.min(1.0).max(0.02);
+    let width = ((image.width() as f32 * scale).round() as u32).max(1);
+    let height = ((image.height() as f32 * scale).round() as u32).max(1);
+    let preview = imageops::resize(image, width, height, imageops::FilterType::Triangle);
+    encode_image_data_url(preview, ImageOutputFormat::Jpeg(72))
+}
+
 fn normalize_long_request(request: LongCaptureRequest) -> LongCaptureRequest {
     LongCaptureRequest {
         source_x: request.source_x,
@@ -564,12 +586,16 @@ fn append_slice(
     base: &mut RgbaImage,
     slice: &RgbaImage,
     scroll_offset: u32,
+    fixed_bottom: u32,
 ) -> Result<(), AppError> {
     let skip = slice
         .height()
         .saturating_sub(scroll_offset)
         .min(slice.height().saturating_sub(1));
-    let append_height = scroll_offset.min(slice.height().saturating_sub(skip));
+    let append_end = slice
+        .height()
+        .saturating_sub(fixed_bottom.min(slice.height().saturating_sub(skip)));
+    let append_height = append_end.saturating_sub(skip);
     if append_height == 0 {
         return Ok(());
     }
@@ -586,14 +612,19 @@ fn prepend_slice(
     base: &mut RgbaImage,
     slice: &RgbaImage,
     scroll_offset: u32,
+    fixed_top: u32,
 ) -> Result<(), AppError> {
-    let prepend_height = scroll_offset.min(slice.height().saturating_sub(1));
+    let prepend_start = fixed_top.min(scroll_offset.saturating_sub(1));
+    let prepend_height = scroll_offset
+        .saturating_sub(prepend_start)
+        .min(slice.height().saturating_sub(prepend_start));
     if prepend_height == 0 {
         return Ok(());
     }
 
     let mut next = ImageBuffer::new(base.width(), base.height() + prepend_height);
-    let prepend_part = imageops::crop_imm(slice, 0, 0, slice.width(), prepend_height).to_image();
+    let prepend_part =
+        imageops::crop_imm(slice, 0, prepend_start, slice.width(), prepend_height).to_image();
     next.copy_from(&prepend_part, 0, 0)?;
     next.copy_from(base, 0, prepend_height)?;
     *base = next;
@@ -605,6 +636,72 @@ fn images_are_similar(previous: &RgbaImage, current: &RgbaImage) -> bool {
         return false;
     }
     sampled_diff(previous, current, 0, 0, previous.height()) < 2.5
+}
+
+fn fixed_edge_bands(previous: &RgbaImage, current: &RgbaImage) -> (u32, u32) {
+    let height = previous.height().min(current.height());
+    if height < 40 {
+        return (0, 0);
+    }
+
+    let max_band = (height / 3).clamp(8, 220);
+    let top = count_fixed_band(previous, current, 0, 1, max_band);
+    let bottom_start = height.saturating_sub(1);
+    let bottom = count_fixed_band(previous, current, bottom_start, -1, max_band);
+    (top, bottom)
+}
+
+fn count_fixed_band(
+    previous: &RgbaImage,
+    current: &RgbaImage,
+    start_y: u32,
+    direction: i32,
+    max_band: u32,
+) -> u32 {
+    let mut fixed = 0;
+    let mut misses = 0;
+    let mut y = start_y as i32;
+    while fixed < max_band && y >= 0 && (y as u32) < previous.height().min(current.height()) {
+        let diff = sampled_row_diff(previous, current, y as u32);
+        if diff <= 3.5 {
+            fixed += 1;
+            misses = 0;
+        } else {
+            misses += 1;
+            if misses >= 4 {
+                break;
+            }
+        }
+        y += direction;
+    }
+    fixed
+}
+
+fn sampled_row_diff(previous: &RgbaImage, current: &RgbaImage, y: u32) -> f64 {
+    let width = previous.width().min(current.width());
+    if width == 0 || y >= previous.height() || y >= current.height() {
+        return f64::MAX;
+    }
+
+    let sample_x_step = (width / 120).max(1);
+    let mut total = 0u64;
+    let mut count = 0u64;
+    let mut x = 0;
+    while x < width {
+        let a = previous.get_pixel(x, y).0;
+        let b = current.get_pixel(x, y).0;
+        total += (a[0] as i32 - b[0] as i32).unsigned_abs() as u64;
+        total += (a[1] as i32 - b[1] as i32).unsigned_abs() as u64;
+        total += (a[2] as i32 - b[2] as i32).unsigned_abs() as u64;
+        count += 3;
+        x += sample_x_step;
+    }
+
+    if count == 0 {
+        f64::MAX
+    } else {
+        total as f64 / count as f64
+    }
 }
 
 fn find_downward_scroll_offset(previous: &RgbaImage, current: &RgbaImage) -> Option<u32> {
@@ -717,7 +814,7 @@ fn sampled_content_diff(
     }
 
     let margin_x = (width / 20).clamp(4, 32);
-    let margin_y = (height / 24).clamp(3, 24);
+    let margin_y = (height / 6).clamp(12, 120);
     let content_width = width.saturating_sub(margin_x * 2).max(1);
     let content_height = height.saturating_sub(margin_y * 2).max(1);
     let sample_x_step = (content_width / 96).max(1);

@@ -34,6 +34,7 @@ type LongCaptureProgress = {
   height: number;
   changed: boolean;
   finished: boolean;
+  previewImageDataUrl?: string | null;
 };
 
 function insideRect(point: { x: number; y: number }, rect: Rect) {
@@ -67,6 +68,7 @@ export default function OverlayPage() {
   const [longSnapshotting, setLongSnapshotting] = useState(false);
   const [autoLongCapture, setAutoLongCapture] = useState(false);
   const [longProgress, setLongProgress] = useState<LongCaptureProgress | null>(null);
+  const [longPreviewUrl, setLongPreviewUrl] = useState<string | null>(null);
   const canvasRef = useRef<AnnotationCanvasHandle | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const selectionBeforeDragRef = useRef<Rect | null>(null);
@@ -129,6 +131,7 @@ export default function OverlayPage() {
     setLongSnapshotting(false);
     setAutoLongCapture(false);
     setLongProgress(null);
+    setLongPreviewUrl(null);
     setNotice("");
     canvasRef.current?.clear();
 
@@ -182,6 +185,19 @@ export default function OverlayPage() {
     const left = Math.min(maxLeft, Math.max(8, selection.x));
     return { left, top: Math.max(8, top) };
   }, [selection, longMode]);
+
+  const longPreviewStyle = useMemo(() => {
+    if (!selection) return undefined;
+    const previewWidth = 184;
+    const gap = 12;
+    const rightLeft = selection.x + selection.width + gap;
+    const left =
+      rightLeft + previewWidth <= window.innerWidth - 8
+        ? rightLeft
+        : Math.max(8, selection.x - previewWidth - gap);
+    const top = Math.min(window.innerHeight - 300, Math.max(8, selection.y));
+    return { left, top: Math.max(8, top) };
+  }, [selection]);
 
   function point(event: React.PointerEvent<HTMLDivElement>) {
     return { x: event.clientX, y: event.clientY };
@@ -242,6 +258,7 @@ export default function OverlayPage() {
       setLongSnapshotting(false);
       setAutoLongCapture(false);
       setLongProgress(null);
+      setLongPreviewUrl(null);
       canvasRef.current?.clear();
     }
   }
@@ -302,6 +319,7 @@ export default function OverlayPage() {
     setLongMode(true);
     setAutoLongCapture(false);
     setLongProgress(null);
+    setLongPreviewUrl(null);
     setTool("select");
     setNotice("长截图中：滚动选区继续，点完成结束");
     setLongBusy(true);
@@ -311,6 +329,7 @@ export default function OverlayPage() {
       await nextPaint();
       const progress = await invoke<LongCaptureProgress>("begin_long_capture_selection", { request });
       setLongProgress(progress);
+      if (progress.previewImageDataUrl) setLongPreviewUrl(progress.previewImageDataUrl);
     } catch (error) {
       const win = getCurrentWebviewWindow();
       await win.show();
@@ -333,6 +352,7 @@ export default function OverlayPage() {
         scrollDeltaY: Math.round(scrollDeltaY)
       });
       setLongProgress(progress);
+      if (progress.previewImageDataUrl) setLongPreviewUrl(progress.previewImageDataUrl);
       if (!progress.changed) {
         setNotice("本次没有采集到可靠新内容，自动滚动会继续尝试");
       } else {
@@ -382,6 +402,7 @@ export default function OverlayPage() {
     setLongSnapshotting(false);
     setAutoLongCapture(false);
     setLongProgress(null);
+    setLongPreviewUrl(null);
     setNotice("");
   }
 
@@ -540,6 +561,17 @@ export default function OverlayPage() {
             </div>
           )}
         </>
+      )}
+
+      {longMode && longPreviewUrl && (
+        <div className="long-preview" style={longPreviewStyle}>
+          <div className="long-preview-title">实时预览</div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={longPreviewUrl} alt="" draggable={false} />
+          <div className="long-preview-meta">
+            {longProgress ? `${longProgress.slices} 屏 · ${longProgress.height}px` : ""}
+          </div>
+        </div>
       )}
 
       {textDraft && (
