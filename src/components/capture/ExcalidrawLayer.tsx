@@ -2,7 +2,19 @@
 
 import dynamic from "next/dynamic";
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import { createPortal } from "react-dom";
+import type { CSSProperties, ReactNode } from "react";
+import {
+  ArrowUpRight,
+  Circle,
+  Diamond,
+  Eraser,
+  Minus,
+  MousePointer2,
+  Pencil,
+  Square,
+  Type
+} from "lucide-react";
 import type { Rect } from "@/types/capture";
 
 type ExcalidrawAPI = {
@@ -10,6 +22,7 @@ type ExcalidrawAPI = {
   getAppState: () => Record<string, any>;
   getFiles: () => Record<string, any>;
   updateScene: (scene: { elements?: readonly any[]; appState?: Record<string, any> }) => void;
+  setActiveTool?: (tool: { type: string; locked?: boolean }) => void;
 };
 
 export type ExcalidrawLayerHandle = {
@@ -22,6 +35,13 @@ type Props = {
   active: boolean;
   selection: Rect | null;
   toolbarPlacement?: { left: number; top: number; width: number; height: number } | null;
+};
+
+type ExcalidrawTool = {
+  type: string;
+  title: string;
+  icon: ReactNode;
+  locked?: boolean;
 };
 
 const Excalidraw = dynamic(
@@ -74,6 +94,18 @@ function toolbarStyle(selection: Rect, placement?: Props["toolbarPlacement"]) {
   } as CSSProperties;
 }
 
+const EXCALIDRAW_TOOLS: ExcalidrawTool[] = [
+  { type: "selection", title: "选择", icon: <MousePointer2 size={16} />, locked: false },
+  { type: "rectangle", title: "矩形", icon: <Square size={16} />, locked: true },
+  { type: "diamond", title: "菱形", icon: <Diamond size={16} />, locked: true },
+  { type: "ellipse", title: "圆形", icon: <Circle size={16} />, locked: true },
+  { type: "arrow", title: "箭头", icon: <ArrowUpRight size={16} />, locked: true },
+  { type: "line", title: "直线", icon: <Minus size={16} />, locked: true },
+  { type: "freedraw", title: "画笔", icon: <Pencil size={16} />, locked: true },
+  { type: "text", title: "文字", icon: <Type size={16} />, locked: true },
+  { type: "eraser", title: "橡皮", icon: <Eraser size={16} />, locked: false }
+];
+
 export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function ExcalidrawLayer(
   { active, selection, toolbarPlacement },
   ref
@@ -87,6 +119,7 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
   const restoringToolRef = useRef(false);
   const frameRef = useRef<Rect | null>(null);
   const [hasElements, setHasElements] = useState(false);
+  const [activeToolType, setActiveToolType] = useState("selection");
 
   function isDrawingTool(activeTool: Record<string, any> | undefined) {
     if (!activeTool) return false;
@@ -132,6 +165,30 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
         restoringToolRef.current = false;
       });
     }
+  }
+
+  function setExcalidrawTool(item: ExcalidrawTool) {
+    const tool = { type: item.type, locked: item.locked ?? true };
+    if (item.locked) {
+      lastDrawingToolRef.current = {
+        type: item.type,
+        customType: null,
+        locked: true,
+        lastActiveTool: null
+      };
+    }
+    setActiveToolType(item.type);
+    apiRef.current?.setActiveTool?.(tool);
+    apiRef.current?.updateScene({
+      appState: {
+        activeTool: {
+          type: item.type,
+          customType: null,
+          locked: item.locked ?? true,
+          lastActiveTool: null
+        }
+      }
+    });
   }
 
   useImperativeHandle(
@@ -212,6 +269,7 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
         onChange={(elements: readonly any[], appState: Record<string, any>, files: Record<string, any>) => {
           const elementCount = visibleElements(elements).length;
           keepDrawingToolLocked(appState, elementCount);
+          setActiveToolType(appState.activeTool?.type ?? "selection");
           elementsRef.current = elements;
           appStateRef.current = appState;
           filesRef.current = files;
@@ -237,6 +295,36 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
           welcomeScreen: false
         }}
       />
+      {active &&
+        toolbarPlacement &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="excalidraw-tool-strip"
+            style={{
+              left: toolbarPlacement.left,
+              top: toolbarPlacement.top,
+              width: toolbarPlacement.width
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onPointerUp={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            onWheel={(event) => event.stopPropagation()}
+          >
+            {EXCALIDRAW_TOOLS.map((item) => (
+              <button
+                key={item.type}
+                className={activeToolType === item.type ? "active" : ""}
+                title={item.title}
+                type="button"
+                onClick={() => setExcalidrawTool(item)}
+              >
+                {item.icon}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
     </div>
   );
 });

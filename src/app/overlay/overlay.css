@@ -80,15 +80,54 @@ body {
 }
 
 .excalidraw-layer.active .App-toolbar {
-  position: fixed !important;
-  top: var(--excalidraw-toolbar-top, 8px) !important;
-  right: auto !important;
-  bottom: auto !important;
-  left: var(--excalidraw-toolbar-left, 8px) !important;
-  translate: none !important;
-  transform: none !important;
-  max-width: calc(100vw - 16px) !important;
-  z-index: 9;
+  display: none !important;
+}
+
+.excalidraw-layer.active [aria-label="Undo"],
+.excalidraw-layer.active [aria-label="Redo"],
+.excalidraw-layer.active [title="Undo"],
+.excalidraw-layer.active [title="Redo"],
+.excalidraw-layer.active [data-testid="undo"],
+.excalidraw-layer.active [data-testid="redo"],
+.excalidraw-layer.active [class*="undo-redo" i] {
+  display: none !important;
+}
+
+.excalidraw-tool-strip {
+  position: fixed;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  max-width: calc(100vw - 16px);
+  min-height: 40px;
+  padding: 5px;
+  overflow-x: auto;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(16, 20, 22, 0.96);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.36);
+  pointer-events: auto;
+}
+
+.excalidraw-tool-strip button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #eef4f5;
+}
+
+.excalidraw-tool-strip button:hover,
+.excalidraw-tool-strip button.active {
+  background: rgba(13, 153, 255, 0.18);
+  color: #7cc7ff;
 }
 
 .excalidraw-layer [aria-label*="library" i],
