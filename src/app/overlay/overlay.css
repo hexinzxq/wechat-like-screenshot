@@ -79,6 +79,10 @@ body {
   overflow: visible;
 }
 
+.excalidraw-layer.active .App-toolbar {
+  translate: var(--excalidraw-toolbar-offset-x, 0) var(--excalidraw-toolbar-offset-y, 0);
+}
+
 .excalidraw-layer [aria-label*="library" i],
 .excalidraw-layer [title*="library" i],
 .excalidraw-layer [data-testid*="library" i],
@@ -142,21 +146,21 @@ body {
 .selection-box {
   position: absolute;
   z-index: 5;
-  border: 1px solid #32d296;
+  border: 1px solid #0d99ff;
   box-shadow:
     inset 0 0 0 1px rgba(0, 0, 0, 0.65),
-    0 0 0 1px rgba(50, 210, 150, 0.35);
+    0 0 0 1px rgba(13, 153, 255, 0.42);
   pointer-events: none;
 }
 
 .window-candidate-box {
   position: absolute;
   z-index: 5;
-  border: 2px solid #32d296;
-  background: rgba(50, 210, 150, 0.08);
+  border: 2px solid #0d99ff;
+  background: rgba(13, 153, 255, 0.08);
   box-shadow:
-    inset 0 0 0 1px rgba(0, 0, 0, 0.72),
-    0 0 0 1px rgba(238, 244, 245, 0.45);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.24),
+    0 0 0 1px rgba(13, 153, 255, 0.32);
   pointer-events: none;
 }
 
@@ -189,8 +193,8 @@ body {
 
 .toolbar button:hover,
 .toolbar button.active {
-  background: rgba(50, 210, 150, 0.18);
-  color: #32d296;
+  background: rgba(13, 153, 255, 0.18);
+  color: #7cc7ff;
 }
 
 .toolbar button:disabled {
@@ -215,7 +219,7 @@ body {
 
 .line-width {
   width: 62px;
-  accent-color: #32d296;
+  accent-color: #0d99ff;
 }
 
 .hint,

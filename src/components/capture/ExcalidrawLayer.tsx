@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import type { Rect } from "@/types/capture";
 
 type ExcalidrawAPI = {
@@ -35,6 +36,34 @@ const Excalidraw = dynamic(
 
 function visibleElements(elements: readonly any[]) {
   return elements.filter((element) => !element.isDeleted);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function toolbarStyle(selection: Rect) {
+  const viewportWidth = typeof window === "undefined" ? 1 : window.innerWidth;
+  const viewportHeight = typeof window === "undefined" ? 1 : window.innerHeight;
+  const toolbarWidth = 460;
+  const toolbarHeight = 56;
+  const gap = 10;
+  const centerX = selection.x + selection.width / 2;
+  const targetCenterX = clamp(centerX, toolbarWidth / 2 + 8, Math.max(toolbarWidth / 2 + 8, viewportWidth - toolbarWidth / 2 - 8));
+  const hasMoreSpaceAbove = selection.y >= viewportHeight - selection.y - selection.height;
+  let offsetY = hasMoreSpaceAbove ? -(toolbarHeight + gap) : selection.height + gap;
+
+  const toolbarTop = selection.y + offsetY;
+  if (toolbarTop < 8) {
+    offsetY += 8 - toolbarTop;
+  } else if (toolbarTop + toolbarHeight > viewportHeight - 8) {
+    offsetY -= toolbarTop + toolbarHeight - (viewportHeight - 8);
+  }
+
+  return {
+    "--excalidraw-toolbar-offset-x": `${Math.round(targetCenterX - centerX)}px`,
+    "--excalidraw-toolbar-offset-y": `${Math.round(offsetY)}px`
+  } as CSSProperties;
 }
 
 export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function ExcalidrawLayer(
@@ -146,7 +175,8 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
         left: selection.x,
         top: selection.y,
         width: selection.width,
-        height: selection.height
+        height: selection.height,
+        ...toolbarStyle(selection)
       }}
     >
       <Excalidraw

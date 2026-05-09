@@ -185,9 +185,20 @@ export default function OverlayPage() {
 
   const toolbarStyle = useMemo(() => {
     if (!selection) return undefined;
-    const top = Math.min(window.innerHeight - 48, selection.y + selection.height + 8);
-    const maxLeft = Math.max(8, window.innerWidth - (longMode ? 190 : 680));
-    const left = Math.min(maxLeft, Math.max(8, selection.x));
+    const toolbarWidth = longMode ? 190 : 680;
+    const toolbarHeight = 52;
+    const gap = 8;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const spaceAbove = selection.y;
+    const spaceBelow = viewportHeight - selection.y - selection.height;
+    const preferBelow = spaceBelow >= toolbarHeight + gap || spaceBelow >= spaceAbove;
+    const rawTop = preferBelow ? selection.y + selection.height + gap : selection.y - toolbarHeight - gap;
+    const top = Math.min(viewportHeight - toolbarHeight - 8, Math.max(8, rawTop));
+    const centerX = selection.x + selection.width / 2;
+    const halfWidth = toolbarWidth / 2;
+    const maxLeft = Math.max(8, viewportWidth - toolbarWidth - 8);
+    const left = Math.min(maxLeft, Math.max(8, centerX - halfWidth));
     return { left, top: Math.max(8, top) };
   }, [selection, longMode]);
 
