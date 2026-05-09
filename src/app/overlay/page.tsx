@@ -69,6 +69,7 @@ export default function OverlayPage() {
   const [longProgress, setLongProgress] = useState<LongCaptureProgress | null>(null);
   const canvasRef = useRef<AnnotationCanvasHandle | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
+  const selectionBeforeDragRef = useRef<Rect | null>(null);
 
   async function lockWindow(payload = capture) {
     if (!payload) return;
@@ -99,14 +100,30 @@ export default function OverlayPage() {
     };
   }
 
+  function clampPointToRect(point: { x: number; y: number }, rect: Rect) {
+    return {
+      x: Math.min(rect.x + rect.width, Math.max(rect.x, point.x)),
+      y: Math.min(rect.y + rect.height, Math.max(rect.y, point.y))
+    };
+  }
+
   async function presentCapture(payload: CapturePayload, options?: { longPreview?: boolean }) {
-    setCapture(null);
-    setImage(null);
-    setSelection(null);
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("图片加载失败"));
+      img.src = payload.imageDataUrl;
+    });
+
+    const frame = options?.longPreview ? longPreviewFrame(img) : null;
+    setCapture(payload);
+    setImage(img);
+    setSelection(frame);
     setDragStart(null);
+    selectionBeforeDragRef.current = null;
     setTool("select");
     setTextDraft(null);
-    setImageFrame(null);
+    setImageFrame(frame);
     setLongMode(false);
     setLongBusy(false);
     setLongSnapshotting(false);
@@ -115,19 +132,10 @@ export default function OverlayPage() {
     setNotice("");
     canvasRef.current?.clear();
 
-    const img = new Image();
-    img.onload = async () => {
-      const frame = options?.longPreview ? longPreviewFrame(img) : null;
-      setImage(img);
-      setCapture(payload);
-      setImageFrame(frame);
-      if (frame) setSelection(frame);
-      const win = getCurrentWebviewWindow();
-      await win.show();
-      await win.setFocus();
-      await lockWindow(payload);
-    };
-    img.src = payload.imageDataUrl;
+    const win = getCurrentWebviewWindow();
+    await win.show();
+    await win.setFocus();
+    await lockWindow(payload);
   }
 
   useEffect(() => {
@@ -181,12 +189,14 @@ export default function OverlayPage() {
 
   function beginSelect(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
-    void lockWindow();
-    if (imageFrame) return;
     if (longMode || tool !== "select") return;
-    const current = point(event);
-    canvasRef.current?.clear();
+    const raw = point(event);
+    if (imageFrame && !insideRect(raw, imageFrame)) return;
+    const current = imageFrame ? clampPointToRect(raw, imageFrame) : raw;
+    void lockWindow();
+    if (!imageFrame) canvasRef.current?.clear();
     setTextDraft(null);
+    selectionBeforeDragRef.current = selection;
     setDragStart(current);
     setSelection({ x: current.x, y: current.y, width: 0, height: 0 });
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -195,7 +205,8 @@ export default function OverlayPage() {
   function moveSelect(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
     if (longMode || !dragStart || tool !== "select") return;
-    const current = point(event);
+    const raw = point(event);
+    const current = imageFrame ? clampPointToRect(raw, imageFrame) : raw;
     setSelection(normalizeRect(dragStart.x, dragStart.y, current.x, current.y));
   }
 
@@ -204,7 +215,11 @@ export default function OverlayPage() {
     if (longMode || !dragStart) return;
     event.currentTarget.releasePointerCapture(event.pointerId);
     setDragStart(null);
-    setSelection((rect) => (rect && rect.width > 8 && rect.height > 8 ? rect : null));
+    setSelection((rect) => {
+      if (rect && rect.width > 8 && rect.height > 8) return rect;
+      return imageFrame ? selectionBeforeDragRef.current ?? imageFrame : null;
+    });
+    selectionBeforeDragRef.current = null;
   }
 
   async function closeOverlay() {
@@ -312,7 +327,6 @@ export default function OverlayPage() {
   async function stepLongCapture(scrollDeltaY = 120) {
     if (!longMode || longBusy) return;
     setLongBusy(true);
-    setLongSnapshotting(true);
     try {
       await nextPaint();
       const progress = await invoke<LongCaptureProgress>("step_long_capture", {
@@ -330,7 +344,6 @@ export default function OverlayPage() {
       setAutoLongCapture(false);
       setNotice(String(error || "长截图采集失败"));
     } finally {
-      setLongSnapshotting(false);
       setLongBusy(false);
     }
   }
