@@ -45,7 +45,56 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
   const elementsRef = useRef<readonly any[]>([]);
   const appStateRef = useRef<Record<string, any>>({});
   const filesRef = useRef<Record<string, any>>({});
+  const elementCountRef = useRef(0);
+  const lastDrawingToolRef = useRef<Record<string, any> | null>(null);
+  const restoringToolRef = useRef(false);
   const [hasElements, setHasElements] = useState(false);
+
+  function isDrawingTool(activeTool: Record<string, any> | undefined) {
+    if (!activeTool) return false;
+    return !["selection", "hand", "eraser"].includes(activeTool.type);
+  }
+
+  function rememberDrawingTool(activeTool: Record<string, any> | undefined) {
+    if (!isDrawingTool(activeTool)) return;
+    lastDrawingToolRef.current = {
+      ...activeTool,
+      locked: true
+    };
+  }
+
+  function keepDrawingToolLocked(appState: Record<string, any>, elementCount: number) {
+    const activeTool = appState.activeTool;
+    if (!activeTool || restoringToolRef.current) return;
+
+    if (isDrawingTool(activeTool)) {
+      rememberDrawingTool(activeTool);
+      if (!activeTool.locked) {
+        apiRef.current?.updateScene({
+          appState: {
+            activeTool: {
+              ...activeTool,
+              locked: true
+            }
+          }
+        });
+      }
+      return;
+    }
+
+    const addedElement = elementCount > elementCountRef.current;
+    if (activeTool.type === "selection" && addedElement && lastDrawingToolRef.current) {
+      restoringToolRef.current = true;
+      window.requestAnimationFrame(() => {
+        apiRef.current?.updateScene({
+          appState: {
+            activeTool: lastDrawingToolRef.current
+          }
+        });
+        restoringToolRef.current = false;
+      });
+    }
+  }
 
   useImperativeHandle(
     ref,
@@ -110,14 +159,26 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
             scrollX: 0,
             scrollY: 0,
             zoom: { value: 1 },
+            activeTool: {
+              type: "selection",
+              customType: null,
+              locked: true,
+              lastActiveTool: null
+            },
             theme: "dark"
           }
         } as any}
         onChange={(elements: readonly any[], appState: Record<string, any>, files: Record<string, any>) => {
+          const elementCount = visibleElements(elements).length;
+          keepDrawingToolLocked(appState, elementCount);
           elementsRef.current = elements;
           appStateRef.current = appState;
           filesRef.current = files;
-          setHasElements(visibleElements(elements).length > 0);
+          elementCountRef.current = elementCount;
+          setHasElements(elementCount > 0);
+        }}
+        onPointerDown={(activeTool: Record<string, any>) => {
+          rememberDrawingTool(activeTool);
         }}
         UIOptions={{
           canvasActions: {
