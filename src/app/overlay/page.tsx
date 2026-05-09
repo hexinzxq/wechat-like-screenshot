@@ -162,8 +162,8 @@ export default function OverlayPage() {
   useEffect(() => {
     if (!longMode || !autoLongCapture) return;
     const timer = window.setInterval(() => {
-      void stepLongCapture(420);
-    }, 850);
+      void stepLongCapture(120);
+    }, 380);
     return () => window.clearInterval(timer);
   }, [longMode, autoLongCapture, longBusy]);
 
@@ -309,7 +309,7 @@ export default function OverlayPage() {
     }
   }
 
-  async function stepLongCapture(scrollDeltaY = 420) {
+  async function stepLongCapture(scrollDeltaY = 120) {
     if (!longMode || longBusy) return;
     setLongBusy(true);
     setLongSnapshotting(true);
@@ -321,10 +321,11 @@ export default function OverlayPage() {
       setLongProgress(progress);
       if (!progress.changed) {
         setAutoLongCapture(false);
-        setNotice("没有检测到新内容，可以点完成结束");
+        setNotice("没有检测到可靠的新内容，可以点完成结束");
       } else {
         setNotice(`长截图中：已拼接 ${progress.slices} 屏`);
       }
+      if (progress.finished) setAutoLongCapture(false);
     } catch (error) {
       setAutoLongCapture(false);
       setNotice(String(error || "长截图采集失败"));
@@ -374,7 +375,11 @@ export default function OverlayPage() {
     if (!insideRect(current, selection)) return;
     event.preventDefault();
     event.stopPropagation();
-    void stepLongCapture(event.deltaY || 420);
+    if (event.deltaY < 0) {
+      setNotice("长截图只向下拼接，向下滚动继续");
+      return;
+    }
+    void stepLongCapture(event.deltaY || 120);
   }
 
   if (!capture) {
@@ -440,7 +445,7 @@ export default function OverlayPage() {
                   >
                     {autoLongCapture ? <Pause size={17} /> : <Play size={17} />}
                   </button>
-                  <button title="采集下一屏" disabled={longBusy} onClick={() => stepLongCapture(420)}>
+                  <button title="采集下一屏" disabled={longBusy} onClick={() => stepLongCapture(120)}>
                     <ScrollText size={17} />
                   </button>
                   <button title="完成长截图" disabled={longBusy} onClick={finishLongCapture}>

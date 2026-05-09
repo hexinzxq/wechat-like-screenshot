@@ -327,6 +327,23 @@ async fn step_long_capture(
     scroll_delta_y: i32,
 ) -> Result<LongCaptureProgress, AppError> {
     let state = app.state::<CaptureState>();
+    if scroll_delta_y < 0 {
+        let session = state
+            .long_session
+            .lock()
+            .map_err(|_| AppError::Message("长截图状态读取失败".into()))?;
+        let Some(session) = session.as_ref() else {
+            return Err(AppError::Message("长截图尚未开始".into()));
+        };
+        return Ok(LongCaptureProgress {
+            slices: session.slices,
+            width: session.stitched.width(),
+            height: session.stitched.height(),
+            changed: false,
+            finished: false,
+        });
+    }
+
     let (request, cursor_x, cursor_y, target_hwnd) = {
         let session = state
             .long_session
@@ -374,12 +391,14 @@ async fn step_long_capture(
         return Err(AppError::Message("长截图尚未开始".into()));
     };
 
-    let changed = !images_are_similar(&session.previous, &current);
-    if changed {
-        let overlap = find_vertical_overlap(&session.previous, &current);
-        append_slice(&mut session.stitched, &current, overlap)?;
-        session.previous = current;
-        session.slices += 1;
+    let mut changed = false;
+    if !images_are_similar(&session.previous, &current) {
+        if let Some(scroll_offset) = find_downward_scroll_offset(&session.previous, &current) {
+            append_slice(&mut session.stitched, &current, scroll_offset)?;
+            session.previous = current;
+            session.slices += 1;
+            changed = true;
+        }
     }
 
     let max_slices = session.request.max_slices.unwrap_or(30).clamp(2, 60);
@@ -533,9 +552,16 @@ fn crop_desktop_area(
     Ok(imageops::crop_imm(image, x, y, crop_width, crop_height).to_image())
 }
 
-fn append_slice(base: &mut RgbaImage, slice: &RgbaImage, overlap: u32) -> Result<(), AppError> {
-    let skip = overlap.min(slice.height().saturating_sub(1));
-    let append_height = slice.height().saturating_sub(skip);
+fn append_slice(
+    base: &mut RgbaImage,
+    slice: &RgbaImage,
+    scroll_offset: u32,
+) -> Result<(), AppError> {
+    let skip = slice
+        .height()
+        .saturating_sub(scroll_offset)
+        .min(slice.height().saturating_sub(1));
+    let append_height = scroll_offset.min(slice.height().saturating_sub(skip));
     if append_height == 0 {
         return Ok(());
     }
@@ -555,29 +581,31 @@ fn images_are_similar(previous: &RgbaImage, current: &RgbaImage) -> bool {
     sampled_diff(previous, current, 0, 0, previous.height()) < 2.5
 }
 
-fn find_vertical_overlap(previous: &RgbaImage, current: &RgbaImage) -> u32 {
-    let max_overlap = previous.height().min(current.height()).saturating_sub(24);
-    if max_overlap < 32 {
-        return 0;
+fn find_downward_scroll_offset(previous: &RgbaImage, current: &RgbaImage) -> Option<u32> {
+    let height = previous.height().min(current.height());
+    if height < 80 {
+        return None;
     }
 
-    let mut best_overlap = 0;
+    let max_shift = ((height as f32) * 0.82).round() as u32;
+    let min_shift = 8;
+    let mut best_shift = 0;
     let mut best_score = f64::MAX;
-    let mut overlap = 32;
-    while overlap <= max_overlap {
-        let previous_start = previous.height() - overlap;
-        let score = sampled_diff(previous, current, previous_start, 0, overlap);
+    let mut shift = min_shift;
+    while shift <= max_shift {
+        let overlap = height - shift;
+        let score = sampled_diff(previous, current, shift, 0, overlap);
         if score < best_score {
             best_score = score;
-            best_overlap = overlap;
+            best_shift = shift;
         }
-        overlap += 4;
+        shift += 2;
     }
 
-    if best_score <= 18.0 {
-        best_overlap
+    if best_score <= 14.0 {
+        Some(best_shift)
     } else {
-        0
+        None
     }
 }
 
