@@ -322,7 +322,8 @@ export default function OverlayPage() {
       if (!progress.changed) {
         setNotice("没有检测到可靠的新内容，可以点完成结束");
       } else {
-        setNotice(`长截图中：已拼接 ${progress.slices} 屏`);
+        const direction = scrollDeltaY < 0 ? "上方" : "下方";
+        setNotice(`长截图中：已采集${direction}内容，共 ${progress.slices} 屏`);
       }
       if (progress.finished) setAutoLongCapture(false);
     } catch (error) {
@@ -375,7 +376,6 @@ export default function OverlayPage() {
     event.preventDefault();
     event.stopPropagation();
     if (event.deltaY < 0) {
-      setNotice("已向上滚动，向下滚动时继续拼接");
       void stepLongCapture(event.deltaY);
       return;
     }

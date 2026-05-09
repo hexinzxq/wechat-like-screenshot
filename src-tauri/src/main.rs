@@ -127,6 +127,7 @@ async fn run_capture(app: AppHandle) -> Result<(), AppError> {
     }
 
     if let Some(window) = app.get_webview_window("overlay") {
+        let was_visible = window.is_visible().unwrap_or(false);
         let _ = window.set_position(PhysicalPosition::new(-32000, -32000));
         let _ = window.hide();
         if let Ok(mut pending_capture) = state.pending_capture.lock() {
@@ -135,7 +136,9 @@ async fn run_capture(app: AppHandle) -> Result<(), AppError> {
         if let Ok(mut long_session) = state.long_session.lock() {
             long_session.take();
         }
-        std::thread::sleep(Duration::from_millis(360));
+        if was_visible {
+            std::thread::sleep(Duration::from_millis(120));
+        }
     }
 
     let result = match tauri::async_runtime::spawn_blocking(capture_desktop).await {
@@ -329,41 +332,6 @@ async fn step_long_capture(
     scroll_delta_y: i32,
 ) -> Result<LongCaptureProgress, AppError> {
     let state = app.state::<CaptureState>();
-    if scroll_delta_y < 0 {
-        let (cursor_x, cursor_y, target_hwnd, slices, width, height) = {
-            let session = state
-                .long_session
-                .lock()
-                .map_err(|_| AppError::Message("长截图状态读取失败".into()))?;
-            let Some(session) = session.as_ref() else {
-                return Err(AppError::Message("长截图尚未开始".into()));
-            };
-            (
-                session.cursor_x,
-                session.cursor_y,
-                session.target_hwnd,
-                session.slices,
-                session.stitched.width(),
-                session.stitched.height(),
-            )
-        };
-        set_overlay_ignore_cursor(&app, true)?;
-        let scroll_result = tauri::async_runtime::spawn_blocking(move || {
-            scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
-            std::thread::sleep(Duration::from_millis(120));
-        })
-        .await;
-        let _ = set_overlay_ignore_cursor(&app, false);
-        scroll_result.map_err(|error| AppError::Message(format!("长截图滚动失败：{error}")))?;
-        return Ok(LongCaptureProgress {
-            slices,
-            width,
-            height,
-            changed: false,
-            finished: false,
-        });
-    }
-
     let (request, cursor_x, cursor_y, target_hwnd) = {
         let session = state
             .long_session
@@ -413,7 +381,18 @@ async fn step_long_capture(
 
     let mut changed = false;
     if !images_are_similar(&session.previous, &current) {
-        if let Some(scroll_offset) = find_downward_scroll_offset(&session.previous, &current) {
+        if scroll_delta_y < 0 {
+            if let Some(scroll_offset) = find_upward_scroll_offset(&session.previous, &current) {
+                prepend_slice(&mut session.stitched, &current, scroll_offset)?;
+                session.previous = current;
+                session.slices += 1;
+                session.no_change_count = 0;
+                changed = true;
+            } else {
+                session.no_change_count += 1;
+            }
+        } else if let Some(scroll_offset) = find_downward_scroll_offset(&session.previous, &current)
+        {
             append_slice(&mut session.stitched, &current, scroll_offset)?;
             session.previous = current;
             session.slices += 1;
@@ -601,6 +580,24 @@ fn append_slice(
     Ok(())
 }
 
+fn prepend_slice(
+    base: &mut RgbaImage,
+    slice: &RgbaImage,
+    scroll_offset: u32,
+) -> Result<(), AppError> {
+    let prepend_height = scroll_offset.min(slice.height().saturating_sub(1));
+    if prepend_height == 0 {
+        return Ok(());
+    }
+
+    let mut next = ImageBuffer::new(base.width(), base.height() + prepend_height);
+    let prepend_part = imageops::crop_imm(slice, 0, 0, slice.width(), prepend_height).to_image();
+    next.copy_from(&prepend_part, 0, 0)?;
+    next.copy_from(base, 0, prepend_height)?;
+    *base = next;
+    Ok(())
+}
+
 fn images_are_similar(previous: &RgbaImage, current: &RgbaImage) -> bool {
     if previous.dimensions() != current.dimensions() {
         return false;
@@ -622,6 +619,34 @@ fn find_downward_scroll_offset(previous: &RgbaImage, current: &RgbaImage) -> Opt
     while shift <= max_shift {
         let overlap = height - shift;
         let score = sampled_diff(previous, current, shift, 0, overlap);
+        if score < best_score {
+            best_score = score;
+            best_shift = shift;
+        }
+        shift += 2;
+    }
+
+    if best_score <= 24.0 {
+        Some(best_shift)
+    } else {
+        None
+    }
+}
+
+fn find_upward_scroll_offset(previous: &RgbaImage, current: &RgbaImage) -> Option<u32> {
+    let height = previous.height().min(current.height());
+    if height < 80 {
+        return None;
+    }
+
+    let max_shift = ((height as f32) * 0.82).round() as u32;
+    let min_shift = 8;
+    let mut best_shift = 0;
+    let mut best_score = f64::MAX;
+    let mut shift = min_shift;
+    while shift <= max_shift {
+        let overlap = height - shift;
+        let score = sampled_diff(previous, current, 0, shift, overlap);
         if score < best_score {
             best_score = score;
             best_shift = shift;
