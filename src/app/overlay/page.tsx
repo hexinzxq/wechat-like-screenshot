@@ -182,9 +182,9 @@ export default function OverlayPage() {
   function beginSelect(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
     void lockWindow();
+    if (imageFrame) return;
     if (longMode || tool !== "select") return;
     const current = point(event);
-    if (imageFrame && !insideRect(current, imageFrame)) return;
     canvasRef.current?.clear();
     setTextDraft(null);
     setDragStart(current);
