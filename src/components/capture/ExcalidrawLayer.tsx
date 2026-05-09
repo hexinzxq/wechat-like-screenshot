@@ -189,7 +189,11 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
             saveAsImage: false,
             saveToActiveFile: false,
             toggleTheme: false
-          }
+          },
+          tools: {
+            image: false
+          },
+          welcomeScreen: false
         }}
       />
     </div>

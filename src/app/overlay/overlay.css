@@ -78,6 +78,15 @@ body {
   height: 100%;
 }
 
+.excalidraw-layer [aria-label*="library" i],
+.excalidraw-layer [title*="library" i],
+.excalidraw-layer [data-testid*="library" i],
+.excalidraw-layer .library-button,
+.excalidraw-layer .LibraryMenu,
+.excalidraw-layer .LibraryMenuItems {
+  display: none !important;
+}
+
 .excalidraw-layer:not(.active) [class*="layer-ui"],
 .excalidraw-layer:not(.active) .Island,
 .excalidraw-layer:not(.active) .App-toolbar,
