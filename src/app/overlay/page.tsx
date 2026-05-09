@@ -16,6 +16,7 @@ import {
   Play,
   RectangleHorizontal,
   Save,
+  Shapes,
   ScrollText,
   Type,
   Undo2,
@@ -181,7 +182,7 @@ export default function OverlayPage() {
   const toolbarStyle = useMemo(() => {
     if (!selection) return undefined;
     const top = Math.min(window.innerHeight - 48, selection.y + selection.height + 8);
-    const maxLeft = Math.max(8, window.innerWidth - (longMode ? 190 : 640));
+    const maxLeft = Math.max(8, window.innerWidth - (longMode ? 190 : 680));
     const left = Math.min(maxLeft, Math.max(8, selection.x));
     return { left, top: Math.max(8, top) };
   }, [selection, longMode]);
@@ -281,7 +282,7 @@ export default function OverlayPage() {
   async function saveSelection() {
     commitTextDraft();
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
-    const dataUrl = canvasRef.current?.exportSelection();
+    const dataUrl = await canvasRef.current?.exportSelection();
     if (!dataUrl) return;
     await closeOverlay();
     await invoke<string | null>("save_png_base64", { pngBase64: dataUrlToBase64(dataUrl) });
@@ -290,7 +291,7 @@ export default function OverlayPage() {
   async function copySelection() {
     commitTextDraft();
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
-    const dataUrl = canvasRef.current?.exportSelection();
+    const dataUrl = await canvasRef.current?.exportSelection();
     if (!dataUrl) return;
     await closeOverlay();
     await invoke("copy_png_base64", { pngBase64: dataUrlToBase64(dataUrl) });
@@ -515,6 +516,13 @@ export default function OverlayPage() {
                   </button>
                   <button className={tool === "text" ? "active" : ""} title="文字" onClick={() => setTool("text")}>
                     <Type size={17} />
+                  </button>
+                  <button
+                    className={tool === "excalidraw" ? "active" : ""}
+                    title="高级绘图"
+                    onClick={() => setTool("excalidraw")}
+                  >
+                    <Shapes size={17} />
                   </button>
                   <div className="divider" />
                   {COLORS.map((item) => (

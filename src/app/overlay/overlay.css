@@ -48,6 +48,42 @@ body {
   z-index: 4;
 }
 
+.excalidraw-layer {
+  position: absolute;
+  z-index: 6;
+  overflow: hidden;
+  border: 1px solid rgba(50, 210, 150, 0.28);
+  background: rgba(0, 0, 0, 0.01);
+  pointer-events: none;
+}
+
+.excalidraw-layer.active {
+  background: rgba(8, 12, 14, 0.18);
+  pointer-events: auto;
+}
+
+.excalidraw-layer .excalidraw,
+.excalidraw-layer .excalidraw-container {
+  width: 100%;
+  height: 100%;
+}
+
+.excalidraw-layer:not(.active) [class*="layer-ui"],
+.excalidraw-layer:not(.active) .Island,
+.excalidraw-layer:not(.active) .App-toolbar,
+.excalidraw-layer:not(.active) .App-menu {
+  display: none !important;
+}
+
+.excalidraw-loading {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: rgba(238, 244, 245, 0.72);
+  font-size: 13px;
+}
+
 .mask {
   position: absolute;
   z-index: 2;

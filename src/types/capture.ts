@@ -19,7 +19,8 @@ export type AnnotationTool =
   | "ellipse"
   | "arrow"
   | "pen"
-  | "text";
+  | "text"
+  | "excalidraw";
 
 export type AnnotationShape =
   | {

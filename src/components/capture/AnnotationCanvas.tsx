@@ -3,11 +3,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { AnnotationShape, AnnotationTool, Rect } from "@/types/capture";
 import { clamp } from "@/lib/image";
+import { ExcalidrawLayer, type ExcalidrawLayerHandle } from "./ExcalidrawLayer";
 
 type Point = { x: number; y: number };
 
 export type AnnotationCanvasHandle = {
-  exportSelection: () => string | null;
+  exportSelection: () => Promise<string | null>;
   addText: (text: { x: number; y: number; text: string; color: string; lineWidth: number }) => void;
   undo: () => void;
   clear: () => void;
@@ -113,6 +114,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
   ref
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const excalidrawRef = useRef<ExcalidrawLayerHandle | null>(null);
   const [shapes, setShapes] = useState<AnnotationShape[]>([]);
   const [draft, setDraft] = useState<AnnotationShape | null>(null);
   const drawing = useRef(false);
@@ -145,7 +147,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
   useImperativeHandle(
     ref,
     () => ({
-      exportSelection() {
+      async exportSelection() {
         if (!selection || !image) return null;
         const viewportWidth = Math.max(1, window.innerWidth);
         const viewportHeight = Math.max(1, window.innerHeight);
@@ -187,6 +189,18 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
         ctx.scale(scaleX, scaleY);
         shapes.forEach((shape) => drawShape(ctx, shape, clipped.x, clipped.y));
         ctx.restore();
+
+        const excalidrawDrawing = await excalidrawRef.current?.exportDrawing();
+        if (excalidrawDrawing) {
+          ctx.drawImage(
+            excalidrawDrawing.canvas,
+            Math.round((selection.x + excalidrawDrawing.x - clipped.x) * scaleX),
+            Math.round((selection.y + excalidrawDrawing.y - clipped.y) * scaleY),
+            Math.round(excalidrawDrawing.canvas.width * scaleX),
+            Math.round(excalidrawDrawing.canvas.height * scaleY)
+          );
+        }
+
         return canvas.toDataURL("image/png");
       },
       addText(text) {
@@ -210,6 +224,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
       },
       clear() {
         setShapes([]);
+        excalidrawRef.current?.clear();
       }
     }),
     [image, imageFrame, selection, shapes]
@@ -224,7 +239,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
   }
 
   function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
-    if (!selection || tool === "select") return;
+    if (!selection || tool === "select" || tool === "excalidraw") return;
     event.preventDefault();
     event.stopPropagation();
     const point = pointerPoint(event);
@@ -310,6 +325,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
       />
+      <ExcalidrawLayer ref={excalidrawRef} active={tool === "excalidraw"} selection={selection} />
     </>
   );
 });

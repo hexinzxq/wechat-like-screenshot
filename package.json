@@ -11,6 +11,7 @@
     "tauri:build": "tauri build"
   },
   "dependencies": {
+    "@excalidraw/excalidraw": "^0.18.1",
     "@tauri-apps/api": "^2.7.0",
     "@tauri-apps/plugin-global-shortcut": "^2.3.0",
     "lucide-react": "^0.468.0",
