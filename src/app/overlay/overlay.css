@@ -90,7 +90,15 @@ body {
 .excalidraw-layer.active [data-testid="undo"],
 .excalidraw-layer.active [data-testid="redo"],
 .excalidraw-layer.active [class*="undo-redo" i],
-.excalidraw-layer.active .excalidraw-contextMenuContainer {
+.excalidraw-layer.active .excalidraw-contextMenuContainer,
+.excalidraw-layer.active .help-icon,
+.excalidraw-layer.active .HelpDialog,
+.excalidraw-layer.active [aria-label*="help" i],
+.excalidraw-layer.active [title*="help" i],
+.excalidraw-layer.active [aria-label*="shortcuts" i],
+.excalidraw-layer.active [title*="shortcuts" i],
+.excalidraw-layer.active [data-testid*="help" i],
+.excalidraw-layer.active [data-testid*="shortcuts" i] {
   display: none !important;
 }
 
