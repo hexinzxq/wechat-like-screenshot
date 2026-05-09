@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -29,6 +30,13 @@ import "./overlay.css";
 
 const COLORS = ["#ff4d4f", "#32d296", "#ffd166", "#55a8ff", "#ffffff"];
 
+const SCREEN_EDGE_GAP = 8;
+const SELECTION_TOOLBAR_GAP = 8;
+const TOOLBAR_STACK_GAP = 6;
+const CAPTURE_TOOLBAR_HEIGHT = 52;
+const EXCALIDRAW_TOOLBAR_WIDTH = 480;
+const EXCALIDRAW_TOOLBAR_HEIGHT = 58;
+
 type LongCaptureProgress = {
   slices: number;
   width: number;
@@ -37,6 +45,22 @@ type LongCaptureProgress = {
   finished: boolean;
   previewImageDataUrl?: string | null;
 };
+
+type ToolbarPlacement = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+type ToolbarLayout = {
+  captureStyle: CSSProperties;
+  excalidrawToolbar: ToolbarPlacement | null;
+};
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
 
 function insideRect(point: { x: number; y: number }, rect: Rect) {
   return (
@@ -183,24 +207,45 @@ export default function OverlayPage() {
     return () => window.clearTimeout(timer);
   }, [longMode, autoLongCapture, longBusy]);
 
-  const toolbarStyle = useMemo(() => {
+  const toolbarLayout = useMemo<ToolbarLayout | undefined>(() => {
     if (!selection) return undefined;
-    const toolbarWidth = longMode ? 190 : 680;
-    const toolbarHeight = 52;
-    const gap = 8;
+    const captureToolbarWidth = longMode ? 190 : 680;
+    const hasExcalidrawToolbar = tool === "excalidraw" && !longMode;
+    const stackWidth = Math.max(captureToolbarWidth, hasExcalidrawToolbar ? EXCALIDRAW_TOOLBAR_WIDTH : 0);
+    const stackHeight =
+      CAPTURE_TOOLBAR_HEIGHT +
+      (hasExcalidrawToolbar ? TOOLBAR_STACK_GAP + EXCALIDRAW_TOOLBAR_HEIGHT : 0);
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     const spaceAbove = selection.y;
     const spaceBelow = viewportHeight - selection.y - selection.height;
-    const preferBelow = spaceBelow >= toolbarHeight + gap || spaceBelow >= spaceAbove;
-    const rawTop = preferBelow ? selection.y + selection.height + gap : selection.y - toolbarHeight - gap;
-    const top = Math.min(viewportHeight - toolbarHeight - 8, Math.max(8, rawTop));
+    const preferBelow = spaceBelow >= stackHeight + SELECTION_TOOLBAR_GAP || spaceBelow >= spaceAbove;
+    const rawStackTop = preferBelow
+      ? selection.y + selection.height + SELECTION_TOOLBAR_GAP
+      : selection.y - stackHeight - SELECTION_TOOLBAR_GAP;
+    const maxStackTop = Math.max(SCREEN_EDGE_GAP, viewportHeight - stackHeight - SCREEN_EDGE_GAP);
+    const stackTop = clamp(rawStackTop, SCREEN_EDGE_GAP, maxStackTop);
     const centerX = selection.x + selection.width / 2;
-    const halfWidth = toolbarWidth / 2;
-    const maxLeft = Math.max(8, viewportWidth - toolbarWidth - 8);
-    const left = Math.min(maxLeft, Math.max(8, centerX - halfWidth));
-    return { left, top: Math.max(8, top) };
-  }, [selection, longMode]);
+    const maxStackLeft = Math.max(SCREEN_EDGE_GAP, viewportWidth - stackWidth - SCREEN_EDGE_GAP);
+    const stackLeft = clamp(centerX - stackWidth / 2, SCREEN_EDGE_GAP, maxStackLeft);
+    const captureLeft = stackLeft + (stackWidth - captureToolbarWidth) / 2;
+    const excalidrawLeft = stackLeft + (stackWidth - EXCALIDRAW_TOOLBAR_WIDTH) / 2;
+
+    return {
+      captureStyle: {
+        left: Math.round(captureLeft),
+        top: Math.round(stackTop)
+      },
+      excalidrawToolbar: hasExcalidrawToolbar
+        ? {
+            left: Math.round(excalidrawLeft),
+            top: Math.round(stackTop + CAPTURE_TOOLBAR_HEIGHT + TOOLBAR_STACK_GAP),
+            width: EXCALIDRAW_TOOLBAR_WIDTH,
+            height: EXCALIDRAW_TOOLBAR_HEIGHT
+          }
+        : null
+    };
+  }, [selection, longMode, tool]);
 
   const longPreviewStyle = useMemo(() => {
     if (!selection) return undefined;
@@ -509,6 +554,7 @@ export default function OverlayPage() {
           commitTextDraft();
           setTextDraft({ x: textPoint.x, y: textPoint.y, value: "" });
         }}
+        excalidrawToolbar={toolbarLayout?.excalidrawToolbar ?? null}
       />
 
       {!selection && hoverWindow && (
@@ -536,7 +582,7 @@ export default function OverlayPage() {
           {!longSnapshotting && (
             <div
               className="toolbar"
-              style={toolbarStyle}
+              style={toolbarLayout?.captureStyle}
               onPointerDown={(event) => event.stopPropagation()}
               onPointerUp={(event) => event.stopPropagation()}
               onWheel={(event) => event.stopPropagation()}

@@ -21,6 +21,7 @@ export type ExcalidrawLayerHandle = {
 type Props = {
   active: boolean;
   selection: Rect | null;
+  toolbarPlacement?: { left: number; top: number; width: number; height: number } | null;
 };
 
 const Excalidraw = dynamic(
@@ -42,7 +43,14 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function toolbarStyle(selection: Rect) {
+function toolbarStyle(selection: Rect, placement?: Props["toolbarPlacement"]) {
+  if (placement) {
+    return {
+      "--excalidraw-toolbar-left": `${Math.round(placement.left)}px`,
+      "--excalidraw-toolbar-top": `${Math.round(placement.top)}px`
+    } as CSSProperties;
+  }
+
   const viewportWidth = typeof window === "undefined" ? 1 : window.innerWidth;
   const viewportHeight = typeof window === "undefined" ? 1 : window.innerHeight;
   const toolbarWidth = 460;
@@ -61,13 +69,13 @@ function toolbarStyle(selection: Rect) {
   }
 
   return {
-    "--excalidraw-toolbar-offset-x": `${Math.round(targetCenterX - centerX)}px`,
-    "--excalidraw-toolbar-offset-y": `${Math.round(offsetY)}px`
+    "--excalidraw-toolbar-left": `${Math.round(targetCenterX - toolbarWidth / 2)}px`,
+    "--excalidraw-toolbar-top": `${Math.round(selection.y + offsetY)}px`
   } as CSSProperties;
 }
 
 export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function ExcalidrawLayer(
-  { active, selection },
+  { active, selection, toolbarPlacement },
   ref
 ) {
   const apiRef = useRef<ExcalidrawAPI | null>(null);
@@ -176,7 +184,7 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
         top: selection.y,
         width: selection.width,
         height: selection.height,
-        ...toolbarStyle(selection)
+        ...toolbarStyle(selection, toolbarPlacement)
       }}
     >
       <Excalidraw

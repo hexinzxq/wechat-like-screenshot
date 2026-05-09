@@ -80,7 +80,15 @@ body {
 }
 
 .excalidraw-layer.active .App-toolbar {
-  translate: var(--excalidraw-toolbar-offset-x, 0) var(--excalidraw-toolbar-offset-y, 0);
+  position: fixed !important;
+  top: var(--excalidraw-toolbar-top, 8px) !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: var(--excalidraw-toolbar-left, 8px) !important;
+  translate: none !important;
+  transform: none !important;
+  max-width: calc(100vw - 16px) !important;
+  z-index: 9;
 }
 
 .excalidraw-layer [aria-label*="library" i],
@@ -170,6 +178,8 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
+  max-width: calc(100vw - 16px);
+  overflow-x: auto;
   min-height: 40px;
   padding: 5px;
   border: 1px solid rgba(255, 255, 255, 0.12);

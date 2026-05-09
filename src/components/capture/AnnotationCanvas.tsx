@@ -6,6 +6,7 @@ import { clamp } from "@/lib/image";
 import { ExcalidrawLayer, type ExcalidrawLayerHandle } from "./ExcalidrawLayer";
 
 type Point = { x: number; y: number };
+type ToolbarPlacement = { left: number; top: number; width: number; height: number };
 
 export type AnnotationCanvasHandle = {
   exportSelection: () => Promise<string | null>;
@@ -24,6 +25,7 @@ type Props = {
   color: string;
   lineWidth: number;
   onTextPoint: (point: Point) => void;
+  excalidrawToolbar?: ToolbarPlacement | null;
 };
 
 function drawArrowHead(ctx: CanvasRenderingContext2D, from: Point, to: Point, size: number) {
@@ -110,7 +112,18 @@ function shapeId() {
 }
 
 export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(function AnnotationCanvas(
-  { image, imageDataUrl, imageFrame, showImage = true, selection, tool, color, lineWidth, onTextPoint },
+  {
+    image,
+    imageDataUrl,
+    imageFrame,
+    showImage = true,
+    selection,
+    tool,
+    color,
+    lineWidth,
+    onTextPoint,
+    excalidrawToolbar
+  },
   ref
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -325,7 +338,12 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
       />
-      <ExcalidrawLayer ref={excalidrawRef} active={tool === "excalidraw"} selection={selection} />
+      <ExcalidrawLayer
+        ref={excalidrawRef}
+        active={tool === "excalidraw"}
+        selection={selection}
+        toolbarPlacement={excalidrawToolbar}
+      />
     </>
   );
 });
