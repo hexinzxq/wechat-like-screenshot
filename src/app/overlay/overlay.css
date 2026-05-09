@@ -87,6 +87,16 @@ body {
   display: none !important;
 }
 
+.excalidraw-layer .App-menu,
+.excalidraw-layer .App-menu__left,
+.excalidraw-layer [aria-label="Menu"],
+.excalidraw-layer [aria-label="菜单"],
+.excalidraw-layer [title="Menu"],
+.excalidraw-layer [title="菜单"],
+.excalidraw-layer [data-testid="main-menu-trigger"] {
+  display: none !important;
+}
+
 .excalidraw-layer:not(.active) [class*="layer-ui"],
 .excalidraw-layer:not(.active) .Island,
 .excalidraw-layer:not(.active) .App-toolbar,

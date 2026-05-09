@@ -128,19 +128,28 @@ async fn run_capture(app: AppHandle) -> Result<(), AppError> {
         *in_progress = true;
     }
 
+    let mut should_wait_for_hidden_window = false;
+    if let Some(window) = app.get_webview_window("main") {
+        let was_visible = window.is_visible().unwrap_or(false);
+        let _ = window.hide();
+        should_wait_for_hidden_window |= was_visible;
+    }
+
     if let Some(window) = app.get_webview_window("overlay") {
         let was_visible = window.is_visible().unwrap_or(false);
         let _ = window.set_position(PhysicalPosition::new(-32000, -32000));
         let _ = window.hide();
+        should_wait_for_hidden_window |= was_visible;
         if let Ok(mut pending_capture) = state.pending_capture.lock() {
             pending_capture.take();
         }
         if let Ok(mut long_session) = state.long_session.lock() {
             long_session.take();
         }
-        if was_visible {
-            std::thread::sleep(Duration::from_millis(120));
-        }
+    }
+
+    if should_wait_for_hidden_window {
+        std::thread::sleep(Duration::from_millis(120));
     }
 
     let result = match tauri::async_runtime::spawn_blocking(capture_desktop).await {
@@ -173,6 +182,10 @@ async fn set_shortcut(app: AppHandle, shortcut: String) -> Result<(), AppError> 
         .lock()
         .map_err(|_| AppError::Message("快捷键状态读取失败".into()))?
         .clone();
+
+    if previous == shortcut && app.global_shortcut().is_registered(shortcut.as_str()) {
+        return Ok(());
+    }
 
     if !previous.is_empty() && app.global_shortcut().is_registered(previous.as_str()) {
         app.global_shortcut().unregister(previous.as_str())?;
@@ -1130,7 +1143,6 @@ fn main() {
         ])
         .setup(|app| {
             build_tray(app)?;
-            ensure_overlay_window(app.handle())?;
             if let Err(error) = register_capture_shortcut(app.handle(), "Alt+A") {
                 eprintln!("failed to register default shortcut Alt+A: {error}");
             }
@@ -1138,6 +1150,12 @@ fn main() {
                 .shortcut
                 .lock()
                 .map_err(|_| AppError::Message("快捷键状态初始化失败".into()))? = "Alt+A".into();
+            show_main(app.handle());
+
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = ensure_overlay_window(&app_handle);
+            });
             Ok(())
         })
         .run(tauri::generate_context!())
