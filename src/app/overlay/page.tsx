@@ -288,7 +288,7 @@ export default function OverlayPage() {
       sourceY: Math.max(0, Math.round(selection.y * scaleY)),
       sourceWidth: Math.max(80, Math.round(selection.width * scaleX)),
       sourceHeight: Math.max(80, Math.round(selection.height * scaleY)),
-      maxSlices: 60
+      maxSlices: 120
     };
   }
 
@@ -334,12 +334,15 @@ export default function OverlayPage() {
       });
       setLongProgress(progress);
       if (!progress.changed) {
-        setNotice("没有检测到可靠的新内容，可以点完成结束");
+        setNotice("本次没有采集到可靠新内容，自动滚动会继续尝试");
       } else {
         const direction = scrollDeltaY < 0 ? "上方" : "下方";
         setNotice(`长截图中：已采集${direction}内容，共 ${progress.slices} 屏`);
       }
-      if (progress.finished) setAutoLongCapture(false);
+      if (progress.finished) {
+        setAutoLongCapture(false);
+        setNotice("已达到长截图保护上限，可以点完成生成长图");
+      }
     } catch (error) {
       setAutoLongCapture(false);
       setNotice(String(error || "长截图采集失败"));

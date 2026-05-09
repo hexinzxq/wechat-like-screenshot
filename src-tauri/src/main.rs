@@ -409,10 +409,8 @@ async fn step_long_capture(
         session.stalled_count += 1;
     }
 
-    let max_slices = session.request.max_slices.unwrap_or(30).clamp(2, 60);
-    let finished = session.stalled_count >= 10
-        || session.slices >= max_slices
-        || session.stitched.height() > 48000;
+    let max_slices = session.request.max_slices.unwrap_or(60).clamp(2, 120);
+    let finished = session.slices >= max_slices || session.stitched.height() > 96000;
 
     Ok(LongCaptureProgress {
         slices: session.slices,
@@ -535,7 +533,7 @@ fn normalize_long_request(request: LongCaptureRequest) -> LongCaptureRequest {
         source_y: request.source_y,
         source_width: request.source_width.clamp(80, 4096),
         source_height: request.source_height.clamp(80, 4096),
-        max_slices: Some(request.max_slices.unwrap_or(30).clamp(2, 60)),
+        max_slices: Some(request.max_slices.unwrap_or(60).clamp(2, 120)),
     }
 }
 
