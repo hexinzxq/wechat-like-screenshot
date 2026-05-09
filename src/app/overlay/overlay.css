@@ -87,8 +87,6 @@ body {
   display: none !important;
 }
 
-.excalidraw-layer .App-menu,
-.excalidraw-layer .App-menu__left,
 .excalidraw-layer [aria-label="Menu"],
 .excalidraw-layer [aria-label="菜单"],
 .excalidraw-layer [title="Menu"],
