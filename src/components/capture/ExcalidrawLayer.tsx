@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import {
   ArrowUpRight,
   Circle,
@@ -28,6 +28,7 @@ type ExcalidrawAPI = {
 export type ExcalidrawLayerHandle = {
   exportDrawing: () => Promise<{ canvas: HTMLCanvasElement; x: number; y: number } | null>;
   clear: () => void;
+  undo: () => boolean;
   hasElements: () => boolean;
 };
 
@@ -44,6 +45,11 @@ type ExcalidrawTool = {
   locked?: boolean;
 };
 
+type ContextMenuState = {
+  x: number;
+  y: number;
+};
+
 const Excalidraw = dynamic(
   async () => {
     const module = await import("@excalidraw/excalidraw");
@@ -57,6 +63,16 @@ const Excalidraw = dynamic(
 
 function visibleElements(elements: readonly any[]) {
   return elements.filter((element) => !element.isDeleted);
+}
+
+function markElementDeleted(element: any) {
+  return {
+    ...element,
+    isDeleted: true,
+    updated: Date.now(),
+    version: (element.version ?? 0) + 1,
+    versionNonce: Math.floor(Math.random() * 1_000_000_000)
+  };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -120,6 +136,7 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
   const frameRef = useRef<Rect | null>(null);
   const [hasElements, setHasElements] = useState(false);
   const [activeToolType, setActiveToolType] = useState("selection");
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
   function isDrawingTool(activeTool: Record<string, any> | undefined) {
     if (!activeTool) return false;
@@ -168,6 +185,7 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
   }
 
   function setExcalidrawTool(item: ExcalidrawTool) {
+    setContextMenu(null);
     const tool = { type: item.type, locked: item.locked ?? true };
     if (item.locked) {
       lastDrawingToolRef.current = {
@@ -187,6 +205,63 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
           locked: item.locked ?? true,
           lastActiveTool: null
         }
+      }
+    });
+  }
+
+  function undoExcalidraw() {
+    const elements = apiRef.current?.getSceneElements() ?? elementsRef.current;
+    const visible = visibleElements(elements);
+    const last = visible.at(-1);
+    if (!last) return false;
+
+    const nextElements = elements.map((element) => (element.id === last.id ? markElementDeleted(element) : element));
+    elementsRef.current = nextElements;
+    setHasElements(visible.length > 1);
+    apiRef.current?.updateScene({ elements: nextElements });
+    setContextMenu(null);
+    return true;
+  }
+
+  function deleteSelectedElements() {
+    const appState = apiRef.current?.getAppState() ?? appStateRef.current;
+    const selectedIds = new Set(Object.keys(appState.selectedElementIds ?? {}).filter((id) => appState.selectedElementIds[id]));
+    if (!selectedIds.size) return false;
+
+    const elements = apiRef.current?.getSceneElements() ?? elementsRef.current;
+    let changed = false;
+    const nextElements = elements.map((element) => {
+      if (!selectedIds.has(element.id) || element.isDeleted) return element;
+      changed = true;
+      return markElementDeleted(element);
+    });
+    if (!changed) return false;
+
+    elementsRef.current = nextElements;
+    setHasElements(visibleElements(nextElements).length > 0);
+    apiRef.current?.updateScene({
+      elements: nextElements,
+      appState: {
+        selectedElementIds: {}
+      }
+    });
+    setContextMenu(null);
+    return true;
+  }
+
+  function showContextMenu(event: MouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const menuWidth = 168;
+    const menuHeight = 176;
+    const edge = 8;
+    setContextMenu({
+      x: clamp(event.clientX, edge, window.innerWidth - menuWidth - edge),
+      y: clamp(event.clientY, edge, window.innerHeight - menuHeight - edge)
+    });
+    apiRef.current?.updateScene({
+      appState: {
+        contextMenu: null
       }
     });
   }
@@ -221,7 +296,11 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
       clear() {
         elementsRef.current = [];
         setHasElements(false);
+        setContextMenu(null);
         apiRef.current?.updateScene({ elements: [] });
+      },
+      undo() {
+        return undoExcalidraw();
       },
       hasElements() {
         return hasElements;
@@ -243,6 +322,7 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
         height: selection.height,
         ...toolbarStyle(selection, toolbarPlacement)
       }}
+      onContextMenu={showContextMenu}
     >
       <Excalidraw
         excalidrawAPI={(api: any) => {
@@ -322,6 +402,48 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
                 {item.icon}
               </button>
             ))}
+          </div>,
+          document.body
+        )}
+      {active &&
+        contextMenu &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="excalidraw-context-menu"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onPointerUp={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+          >
+            <button type="button" onClick={() => setExcalidrawTool(EXCALIDRAW_TOOLS[0])}>
+              选择工具
+            </button>
+            <button type="button" onClick={undoExcalidraw}>
+              撤销上一步
+            </button>
+            <button type="button" onClick={deleteSelectedElements}>
+              删除选中
+            </button>
+            <button type="button" onClick={() => setContextMenu(null)}>
+              关闭菜单
+            </button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() => {
+                elementsRef.current = [];
+                setHasElements(false);
+                apiRef.current?.updateScene({ elements: [] });
+                setContextMenu(null);
+              }}
+            >
+              清空绘图
+            </button>
           </div>,
           document.body
         )}

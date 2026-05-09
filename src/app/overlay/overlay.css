@@ -89,7 +89,8 @@ body {
 .excalidraw-layer.active [title="Redo"],
 .excalidraw-layer.active [data-testid="undo"],
 .excalidraw-layer.active [data-testid="redo"],
-.excalidraw-layer.active [class*="undo-redo" i] {
+.excalidraw-layer.active [class*="undo-redo" i],
+.excalidraw-layer.active .excalidraw-contextMenuContainer {
   display: none !important;
 }
 
@@ -128,6 +129,40 @@ body {
 .excalidraw-tool-strip button.active {
   background: rgba(13, 153, 255, 0.18);
   color: #7cc7ff;
+}
+
+.excalidraw-context-menu {
+  position: fixed;
+  z-index: 14;
+  display: grid;
+  width: 168px;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(16, 20, 22, 0.98);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.42);
+  pointer-events: auto;
+}
+
+.excalidraw-context-menu button {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #eef4f5;
+  font-size: 13px;
+  text-align: left;
+}
+
+.excalidraw-context-menu button:hover {
+  background: rgba(13, 153, 255, 0.18);
+  color: #7cc7ff;
+}
+
+.excalidraw-context-menu button.danger:hover {
+  background: rgba(255, 77, 79, 0.18);
+  color: #ff8f91;
 }
 
 .excalidraw-layer [aria-label*="library" i],

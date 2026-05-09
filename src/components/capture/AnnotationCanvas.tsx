@@ -233,6 +233,12 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
         ]);
       },
       undo() {
+        if (tool === "excalidraw" && excalidrawRef.current?.undo()) {
+          return;
+        }
+        if (!shapes.length && excalidrawRef.current?.undo()) {
+          return;
+        }
         setShapes((items) => items.slice(0, -1));
       },
       clear() {
