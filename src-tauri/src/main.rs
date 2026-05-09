@@ -354,7 +354,7 @@ async fn step_long_capture(
     let capture_result = tauri::async_runtime::spawn_blocking(move || {
         if scroll_delta_y != 0 {
             scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
-            std::thread::sleep(Duration::from_millis(110));
+            std::thread::sleep(Duration::from_millis(170));
         } else {
             std::thread::sleep(Duration::from_millis(120));
         }
@@ -622,7 +622,7 @@ fn find_downward_scroll_offset(previous: &RgbaImage, current: &RgbaImage) -> Opt
     let mut shift = min_shift;
     while shift <= max_shift {
         let overlap = height - shift;
-        let score = sampled_diff(previous, current, shift, 0, overlap);
+        let score = sampled_content_diff(previous, current, shift, 0, overlap);
         if score < best_score {
             best_score = score;
             best_shift = shift;
@@ -650,7 +650,7 @@ fn find_upward_scroll_offset(previous: &RgbaImage, current: &RgbaImage) -> Optio
     let mut shift = min_shift;
     while shift <= max_shift {
         let overlap = height - shift;
-        let score = sampled_diff(previous, current, 0, shift, overlap);
+        let score = sampled_content_diff(previous, current, 0, shift, overlap);
         if score < best_score {
             best_score = score;
             best_shift = shift;
@@ -688,6 +688,55 @@ fn sampled_diff(
 
         let mut x = 0;
         while x < width {
+            let a = previous.get_pixel(x, py).0;
+            let b = current.get_pixel(x, cy).0;
+            total += (a[0] as i32 - b[0] as i32).unsigned_abs() as u64;
+            total += (a[1] as i32 - b[1] as i32).unsigned_abs() as u64;
+            total += (a[2] as i32 - b[2] as i32).unsigned_abs() as u64;
+            count += 3;
+            x += sample_x_step;
+        }
+        y += sample_y_step;
+    }
+
+    if count == 0 {
+        f64::MAX
+    } else {
+        total as f64 / count as f64
+    }
+}
+
+fn sampled_content_diff(
+    previous: &RgbaImage,
+    current: &RgbaImage,
+    previous_y: u32,
+    current_y: u32,
+    height: u32,
+) -> f64 {
+    let width = previous.width().min(current.width());
+    if width < 12 || height < 12 {
+        return sampled_diff(previous, current, previous_y, current_y, height);
+    }
+
+    let margin_x = (width / 20).clamp(4, 32);
+    let margin_y = (height / 24).clamp(3, 24);
+    let content_width = width.saturating_sub(margin_x * 2).max(1);
+    let content_height = height.saturating_sub(margin_y * 2).max(1);
+    let sample_x_step = (content_width / 96).max(1);
+    let sample_y_step = (content_height / 96).max(1);
+    let mut total = 0u64;
+    let mut count = 0u64;
+
+    let mut y = margin_y;
+    while y < margin_y + content_height {
+        let py = previous_y + y;
+        let cy = current_y + y;
+        if py >= previous.height() || cy >= current.height() {
+            break;
+        }
+
+        let mut x = margin_x;
+        while x < margin_x + content_width {
             let a = previous.get_pixel(x, py).0;
             let b = current.get_pixel(x, cy).0;
             total += (a[0] as i32 - b[0] as i32).unsigned_abs() as u64;
@@ -756,20 +805,13 @@ fn scroll_at_target(target_hwnd: isize, x: i32, y: i32, scroll_delta_y: i32) {
             focus_hwnd(hwnd);
         }
 
-        let steps = (wheel_delta.unsigned_abs() / 24).clamp(5, 12) as i32;
-        let base_delta = wheel_delta / steps;
-        let mut remainder = wheel_delta % steps;
+        let direction = wheel_delta.signum();
+        let notches = (wheel_delta.unsigned_abs() / 120).max(1) as i32;
 
-        for index in 0..steps {
-            let mut delta = base_delta;
-            if remainder != 0 {
-                let correction = remainder.signum();
-                delta += correction;
-                remainder -= correction;
-            }
-            send_wheel_delta(delta);
-            if index + 1 < steps {
-                std::thread::sleep(Duration::from_millis(14));
+        for index in 0..notches {
+            send_wheel_delta(direction * 120);
+            if index + 1 < notches {
+                std::thread::sleep(Duration::from_millis(28));
             }
         }
     }
