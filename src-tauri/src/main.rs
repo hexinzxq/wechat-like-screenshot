@@ -92,7 +92,8 @@ struct LongCaptureSession {
     cursor_y: i32,
     target_hwnd: isize,
     slices: u32,
-    no_change_count: u32,
+    stalled_count: u32,
+    unmatched_count: u32,
 }
 
 #[derive(Serialize)]
@@ -320,7 +321,8 @@ async fn begin_long_capture_selection(
         cursor_y,
         target_hwnd,
         slices: 1,
-        no_change_count: 0,
+        stalled_count: 0,
+        unmatched_count: 0,
     });
 
     Ok(progress)
@@ -352,7 +354,7 @@ async fn step_long_capture(
     let capture_result = tauri::async_runtime::spawn_blocking(move || {
         if scroll_delta_y != 0 {
             scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
-            std::thread::sleep(Duration::from_millis(260));
+            std::thread::sleep(Duration::from_millis(110));
         } else {
             std::thread::sleep(Duration::from_millis(120));
         }
@@ -386,27 +388,29 @@ async fn step_long_capture(
                 prepend_slice(&mut session.stitched, &current, scroll_offset)?;
                 session.previous = current;
                 session.slices += 1;
-                session.no_change_count = 0;
+                session.stalled_count = 0;
+                session.unmatched_count = 0;
                 changed = true;
             } else {
-                session.no_change_count += 1;
+                session.unmatched_count += 1;
             }
         } else if let Some(scroll_offset) = find_downward_scroll_offset(&session.previous, &current)
         {
             append_slice(&mut session.stitched, &current, scroll_offset)?;
             session.previous = current;
             session.slices += 1;
-            session.no_change_count = 0;
+            session.stalled_count = 0;
+            session.unmatched_count = 0;
             changed = true;
         } else {
-            session.no_change_count += 1;
+            session.unmatched_count += 1;
         }
     } else {
-        session.no_change_count += 1;
+        session.stalled_count += 1;
     }
 
     let max_slices = session.request.max_slices.unwrap_or(30).clamp(2, 60);
-    let finished = session.no_change_count >= 6
+    let finished = session.stalled_count >= 10
         || session.slices >= max_slices
         || session.stitched.height() > 48000;
 
@@ -752,25 +756,45 @@ fn scroll_at_target(target_hwnd: isize, x: i32, y: i32, scroll_delta_y: i32) {
             focus_hwnd(hwnd);
         }
 
-        let input = INPUT {
-            r#type: INPUT_MOUSE,
-            Anonymous: INPUT_0 {
-                mi: MOUSEINPUT {
-                    dx: 0,
-                    dy: 0,
-                    mouseData: wheel_delta as u32,
-                    dwFlags: MOUSEEVENTF_WHEEL,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        };
-        SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+        let steps = (wheel_delta.unsigned_abs() / 24).clamp(5, 12) as i32;
+        let base_delta = wheel_delta / steps;
+        let mut remainder = wheel_delta % steps;
+
+        for index in 0..steps {
+            let mut delta = base_delta;
+            if remainder != 0 {
+                let correction = remainder.signum();
+                delta += correction;
+                remainder -= correction;
+            }
+            send_wheel_delta(delta);
+            if index + 1 < steps {
+                std::thread::sleep(Duration::from_millis(14));
+            }
+        }
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 fn scroll_at_target(_target_hwnd: isize, _x: i32, _y: i32, _scroll_delta_y: i32) {}
+
+#[cfg(target_os = "windows")]
+unsafe fn send_wheel_delta(delta: i32) {
+    let input = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: delta as u32,
+                dwFlags: MOUSEEVENTF_WHEEL,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+}
 
 fn wheel_delta_from_scroll(scroll_delta_y: i32) -> i32 {
     let direction = if scroll_delta_y >= 0 { -1 } else { 1 };

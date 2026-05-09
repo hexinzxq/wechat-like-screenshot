@@ -160,11 +160,11 @@ export default function OverlayPage() {
   }, [longMode]);
 
   useEffect(() => {
-    if (!longMode || !autoLongCapture) return;
-    const timer = window.setInterval(() => {
+    if (!longMode || !autoLongCapture || longBusy) return;
+    const timer = window.setTimeout(() => {
       void stepLongCapture(120);
-    }, 320);
-    return () => window.clearInterval(timer);
+    }, 80);
+    return () => window.clearTimeout(timer);
   }, [longMode, autoLongCapture, longBusy]);
 
   const toolbarStyle = useMemo(() => {
