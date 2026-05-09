@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { forwardRef, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { Rect } from "@/types/capture";
 
 type ExcalidrawAPI = {
@@ -22,6 +22,11 @@ type Props = {
   selection: Rect | null;
 };
 
+type ViewportSize = {
+  width: number;
+  height: number;
+};
+
 const Excalidraw = dynamic(
   async () => {
     const module = await import("@excalidraw/excalidraw");
@@ -37,6 +42,25 @@ function visibleElements(elements: readonly any[]) {
   return elements.filter((element) => !element.isDeleted);
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function editorFrame(selection: Rect, viewport: ViewportSize): Rect {
+  const width = Math.min(viewport.width, Math.max(selection.width + 520, 720));
+  const height = Math.min(viewport.height, Math.max(selection.height + 360, 460));
+  const spareX = Math.max(0, width - selection.width);
+  const preferredLeft = selection.x - spareX / 2;
+  const preferredTop = selection.y - Math.min(190, Math.max(80, height - selection.height - 120));
+
+  return {
+    x: Math.round(clamp(preferredLeft, 0, Math.max(0, viewport.width - width))),
+    y: Math.round(clamp(preferredTop, 0, Math.max(0, viewport.height - height))),
+    width: Math.round(width),
+    height: Math.round(height)
+  };
+}
+
 export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function ExcalidrawLayer(
   { active, selection },
   ref
@@ -48,7 +72,25 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
   const elementCountRef = useRef(0);
   const lastDrawingToolRef = useRef<Record<string, any> | null>(null);
   const restoringToolRef = useRef(false);
+  const frameRef = useRef<Rect | null>(null);
   const [hasElements, setHasElements] = useState(false);
+  const [viewport, setViewport] = useState<ViewportSize>(() => ({
+    width: typeof window === "undefined" ? 1 : Math.max(1, window.innerWidth),
+    height: typeof window === "undefined" ? 1 : Math.max(1, window.innerHeight)
+  }));
+
+  useEffect(() => {
+    function updateViewport() {
+      setViewport({
+        width: Math.max(1, window.innerWidth),
+        height: Math.max(1, window.innerHeight)
+      });
+    }
+
+    updateViewport();
+    window.addEventListener("resize", updateViewport);
+    return () => window.removeEventListener("resize", updateViewport);
+  }, []);
 
   function isDrawingTool(activeTool: Record<string, any> | undefined) {
     if (!activeTool) return false;
@@ -107,6 +149,7 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
           import("@excalidraw/excalidraw")
         ]);
         const [minX, minY] = getCommonBounds(elements as never);
+        const frame = frameRef.current;
         const canvas = await exportToCanvas({
           elements: elements as never,
           files: apiRef.current?.getFiles() ?? filesRef.current,
@@ -120,7 +163,7 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
           exportPadding: 0
         });
 
-        return { canvas, x: minX, y: minY };
+        return { canvas, x: (frame?.x ?? 0) + minX, y: (frame?.y ?? 0) + minY };
       },
       clear() {
         elementsRef.current = [];
@@ -135,15 +178,17 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
   );
 
   if (!selection || (!active && !hasElements)) return null;
+  const frame = editorFrame(selection, viewport);
+  frameRef.current = frame;
 
   return (
     <div
       className={`excalidraw-layer${active ? " active" : ""}`}
       style={{
-        left: selection.x,
-        top: selection.y,
-        width: selection.width,
-        height: selection.height
+        left: frame.x,
+        top: frame.y,
+        width: frame.width,
+        height: frame.height
       }}
     >
       <Excalidraw

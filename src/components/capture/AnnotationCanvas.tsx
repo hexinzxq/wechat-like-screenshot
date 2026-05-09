@@ -194,8 +194,8 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
         if (excalidrawDrawing) {
           ctx.drawImage(
             excalidrawDrawing.canvas,
-            Math.round((selection.x + excalidrawDrawing.x - clipped.x) * scaleX),
-            Math.round((selection.y + excalidrawDrawing.y - clipped.y) * scaleY),
+            Math.round((excalidrawDrawing.x - clipped.x) * scaleX),
+            Math.round((excalidrawDrawing.y - clipped.y) * scaleY),
             Math.round(excalidrawDrawing.canvas.width * scaleX),
             Math.round(excalidrawDrawing.canvas.height * scaleY)
           );
