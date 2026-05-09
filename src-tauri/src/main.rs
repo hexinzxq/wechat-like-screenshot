@@ -22,7 +22,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
-    Foundation::POINT,
+    Foundation::{HWND, POINT},
     UI::{
         Input::KeyboardAndMouse::{
             SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT,
@@ -60,6 +60,7 @@ impl serde::Serialize for AppError {
 struct CaptureState {
     in_progress: Mutex<bool>,
     pending_capture: Mutex<Option<CapturePayload>>,
+    long_session: Mutex<Option<LongCaptureSession>>,
     shortcut: Mutex<String>,
 }
 
@@ -73,7 +74,7 @@ struct CapturePayload {
     origin_y: i32,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct LongCaptureRequest {
     source_x: u32,
@@ -81,6 +82,26 @@ struct LongCaptureRequest {
     source_width: u32,
     source_height: u32,
     max_slices: Option<u32>,
+}
+
+struct LongCaptureSession {
+    request: LongCaptureRequest,
+    previous: RgbaImage,
+    stitched: RgbaImage,
+    cursor_x: i32,
+    cursor_y: i32,
+    target_hwnd: isize,
+    slices: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LongCaptureProgress {
+    slices: u32,
+    width: u32,
+    height: u32,
+    changed: bool,
+    finished: bool,
 }
 
 struct DesktopCapture {
@@ -109,6 +130,9 @@ async fn run_capture(app: AppHandle) -> Result<(), AppError> {
         let _ = window.hide();
         if let Ok(mut pending_capture) = state.pending_capture.lock() {
             pending_capture.take();
+        }
+        if let Ok(mut long_session) = state.long_session.lock() {
+            long_session.take();
         }
         std::thread::sleep(Duration::from_millis(360));
     }
@@ -158,10 +182,15 @@ async fn set_shortcut(app: AppHandle, shortcut: String) -> Result<(), AppError> 
 
 #[tauri::command]
 async fn finish_capture(app: AppHandle) -> Result<(), AppError> {
-    if let Ok(mut pending_capture) = app.state::<CaptureState>().pending_capture.lock() {
+    let state = app.state::<CaptureState>();
+    if let Ok(mut pending_capture) = state.pending_capture.lock() {
         pending_capture.take();
     }
+    if let Ok(mut long_session) = state.long_session.lock() {
+        long_session.take();
+    }
     if let Some(window) = app.get_webview_window("overlay") {
+        let _ = window.set_ignore_cursor_events(false);
         window.set_position(PhysicalPosition::new(-32000, -32000))?;
         window.hide()?;
     }
@@ -233,19 +262,167 @@ async fn copy_png_base64(png_base64: String) -> Result<(), AppError> {
 }
 
 #[tauri::command]
-async fn capture_long_selection(
+async fn begin_long_capture_selection(
     app: AppHandle,
     request: LongCaptureRequest,
-) -> Result<CapturePayload, AppError> {
-    if let Some(window) = app.get_webview_window("overlay") {
-        window.set_position(PhysicalPosition::new(-32000, -32000))?;
-        window.hide()?;
+) -> Result<LongCaptureProgress, AppError> {
+    let request = normalize_long_request(request);
+    set_overlay_ignore_cursor(&app, true)?;
+
+    let capture_result = tauri::async_runtime::spawn_blocking({
+        let request = request.clone();
+        move || {
+            std::thread::sleep(Duration::from_millis(90));
+            let desktop = capture_desktop_image()?;
+            let cursor_x =
+                desktop.origin_x + request.source_x as i32 + (request.source_width / 2) as i32;
+            let cursor_y =
+                desktop.origin_y + request.source_y as i32 + (request.source_height / 2) as i32;
+            let target_hwnd = target_window_at(cursor_x, cursor_y);
+            focus_hwnd(target_hwnd);
+            let first = crop_desktop_area(
+                &desktop.image,
+                request.source_x,
+                request.source_y,
+                request.source_width,
+                request.source_height,
+            )?;
+            Ok::<_, AppError>((first, cursor_x, cursor_y, hwnd_to_isize(target_hwnd)))
+        }
+    })
+    .await;
+
+    let _ = set_overlay_ignore_cursor(&app, false);
+    let (first, cursor_x, cursor_y, target_hwnd) = capture_result
+        .map_err(|error| AppError::Message(format!("长截图初始化失败：{error}")))??;
+
+    let progress = LongCaptureProgress {
+        slices: 1,
+        width: first.width(),
+        height: first.height(),
+        changed: true,
+        finished: false,
+    };
+
+    let state = app.state::<CaptureState>();
+    *state
+        .long_session
+        .lock()
+        .map_err(|_| AppError::Message("长截图状态锁定失败".into()))? = Some(LongCaptureSession {
+        request,
+        previous: first.clone(),
+        stitched: first,
+        cursor_x,
+        cursor_y,
+        target_hwnd,
+        slices: 1,
+    });
+
+    Ok(progress)
+}
+
+#[tauri::command]
+async fn step_long_capture(
+    app: AppHandle,
+    scroll_delta_y: i32,
+) -> Result<LongCaptureProgress, AppError> {
+    let state = app.state::<CaptureState>();
+    let (request, cursor_x, cursor_y, target_hwnd) = {
+        let session = state
+            .long_session
+            .lock()
+            .map_err(|_| AppError::Message("长截图状态读取失败".into()))?;
+        let Some(session) = session.as_ref() else {
+            return Err(AppError::Message("长截图尚未开始".into()));
+        };
+        (
+            session.request.clone(),
+            session.cursor_x,
+            session.cursor_y,
+            session.target_hwnd,
+        )
+    };
+
+    set_overlay_ignore_cursor(&app, true)?;
+    let capture_result = tauri::async_runtime::spawn_blocking(move || {
+        if scroll_delta_y != 0 {
+            scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
+            std::thread::sleep(Duration::from_millis(420));
+        } else {
+            std::thread::sleep(Duration::from_millis(120));
+        }
+
+        let desktop = capture_desktop_image()?;
+        crop_desktop_area(
+            &desktop.image,
+            request.source_x,
+            request.source_y,
+            request.source_width,
+            request.source_height,
+        )
+    })
+    .await;
+    let _ = set_overlay_ignore_cursor(&app, false);
+    let current =
+        capture_result.map_err(|error| AppError::Message(format!("长截图采集失败：{error}")))??;
+
+    let mut session = state
+        .long_session
+        .lock()
+        .map_err(|_| AppError::Message("长截图状态保存失败".into()))?;
+    let Some(session) = session.as_mut() else {
+        return Err(AppError::Message("长截图尚未开始".into()));
+    };
+
+    let changed = !images_are_similar(&session.previous, &current);
+    if changed {
+        let overlap = find_vertical_overlap(&session.previous, &current);
+        append_slice(&mut session.stitched, &current, overlap)?;
+        session.previous = current;
+        session.slices += 1;
     }
 
-    match tauri::async_runtime::spawn_blocking(move || capture_long_area(request)).await {
-        Ok(result) => result,
-        Err(error) => Err(AppError::Message(format!("长截图任务失败：{error}"))),
-    }
+    let max_slices = session.request.max_slices.unwrap_or(30).clamp(2, 60);
+    let finished = !changed || session.slices >= max_slices || session.stitched.height() > 48000;
+
+    Ok(LongCaptureProgress {
+        slices: session.slices,
+        width: session.stitched.width(),
+        height: session.stitched.height(),
+        changed,
+        finished,
+    })
+}
+
+#[tauri::command]
+async fn finish_long_capture(
+    state: tauri::State<'_, CaptureState>,
+) -> Result<CapturePayload, AppError> {
+    let session = state
+        .long_session
+        .lock()
+        .map_err(|_| AppError::Message("长截图状态读取失败".into()))?
+        .take()
+        .ok_or_else(|| AppError::Message("长截图尚未开始".into()))?;
+
+    let image_data_url = encode_image_data_url(session.stitched.clone(), ImageOutputFormat::Png)?;
+    Ok(CapturePayload {
+        image_data_url,
+        width: session.stitched.width(),
+        height: session.stitched.height(),
+        origin_x: 0,
+        origin_y: 0,
+    })
+}
+
+#[tauri::command]
+async fn cancel_long_capture(state: tauri::State<'_, CaptureState>) -> Result<(), AppError> {
+    state
+        .long_session
+        .lock()
+        .map_err(|_| AppError::Message("长截图状态清理失败".into()))?
+        .take();
+    Ok(())
 }
 
 fn capture_desktop() -> Result<CapturePayload, AppError> {
@@ -323,60 +500,21 @@ fn encode_image_data_url(image: RgbaImage, format: ImageOutputFormat) -> Result<
     Ok(format!("data:{mime};base64,{encoded}"))
 }
 
-fn capture_long_area(request: LongCaptureRequest) -> Result<CapturePayload, AppError> {
-    let width = request.source_width.clamp(80, 4096);
-    let height = request.source_height.clamp(80, 4096);
-    let max_slices = request.max_slices.unwrap_or(10).clamp(2, 18);
-
-    std::thread::sleep(Duration::from_millis(220));
-    let first_desktop = capture_desktop_image()?;
-    let mut previous = crop_desktop_area(
-        &first_desktop.image,
-        request.source_x,
-        request.source_y,
-        width,
-        height,
-    )?;
-    let mut stitched = previous.clone();
-
-    let cursor_x = first_desktop.origin_x + request.source_x as i32 + (width / 2) as i32;
-    let cursor_y = first_desktop.origin_y + request.source_y as i32 + (height / 2) as i32;
-    focus_window_at(cursor_x, cursor_y);
-
-    for _ in 1..max_slices {
-        scroll_down_at(cursor_x, cursor_y, scroll_notches_for_height(height));
-        std::thread::sleep(Duration::from_millis(520));
-
-        let desktop = capture_desktop_image()?;
-        let current = crop_desktop_area(
-            &desktop.image,
-            request.source_x,
-            request.source_y,
-            width,
-            height,
-        )?;
-
-        if images_are_similar(&previous, &current) {
-            break;
-        }
-
-        let overlap = find_vertical_overlap(&previous, &current);
-        append_slice(&mut stitched, &current, overlap)?;
-        previous = current;
-
-        if stitched.height() > 32000 {
-            break;
-        }
+fn normalize_long_request(request: LongCaptureRequest) -> LongCaptureRequest {
+    LongCaptureRequest {
+        source_x: request.source_x,
+        source_y: request.source_y,
+        source_width: request.source_width.clamp(80, 4096),
+        source_height: request.source_height.clamp(80, 4096),
+        max_slices: Some(request.max_slices.unwrap_or(30).clamp(2, 60)),
     }
+}
 
-    let image_data_url = encode_image_data_url(stitched.clone(), ImageOutputFormat::Png)?;
-    Ok(CapturePayload {
-        image_data_url,
-        width: stitched.width(),
-        height: stitched.height(),
-        origin_x: 0,
-        origin_y: 0,
-    })
+fn set_overlay_ignore_cursor(app: &AppHandle, ignore: bool) -> Result<(), AppError> {
+    if let Some(window) = app.get_webview_window("overlay") {
+        window.set_ignore_cursor_events(ignore)?;
+    }
+    Ok(())
 }
 
 fn crop_desktop_area(
@@ -408,10 +546,6 @@ fn append_slice(base: &mut RgbaImage, slice: &RgbaImage, overlap: u32) -> Result
     next.copy_from(&append_part, 0, base.height())?;
     *base = next;
     Ok(())
-}
-
-fn scroll_notches_for_height(height: u32) -> i32 {
-    ((height as f32 / 180.0).round() as i32).clamp(3, 7)
 }
 
 fn images_are_similar(previous: &RgbaImage, current: &RgbaImage) -> bool {
@@ -489,24 +623,55 @@ fn sampled_diff(
 }
 
 #[cfg(target_os = "windows")]
-fn focus_window_at(x: i32, y: i32) {
+fn target_window_at(x: i32, y: i32) -> HWND {
     unsafe {
         SetCursorPos(x, y);
-        let hwnd = WindowFromPoint(POINT { x, y });
-        if !hwnd.is_null() {
+        WindowFromPoint(POINT { x, y })
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn target_window_at(_x: i32, _y: i32) -> isize {
+    0
+}
+
+#[cfg(target_os = "windows")]
+fn hwnd_to_isize(hwnd: HWND) -> isize {
+    hwnd as isize
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hwnd_to_isize(hwnd: isize) -> isize {
+    hwnd
+}
+
+#[cfg(target_os = "windows")]
+fn isize_to_hwnd(hwnd: isize) -> HWND {
+    hwnd as HWND
+}
+
+#[cfg(target_os = "windows")]
+fn focus_hwnd(hwnd: HWND) {
+    if !hwnd.is_null() {
+        unsafe {
             SetForegroundWindow(hwnd);
         }
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-fn focus_window_at(_x: i32, _y: i32) {}
+fn focus_hwnd(_hwnd: isize) {}
 
 #[cfg(target_os = "windows")]
-fn scroll_down_at(x: i32, y: i32, notches: i32) {
+fn scroll_at_target(target_hwnd: isize, x: i32, y: i32, scroll_delta_y: i32) {
     unsafe {
         SetCursorPos(x, y);
-        let wheel_delta = -120i32 * notches.max(1);
+        let wheel_delta = wheel_delta_from_scroll(scroll_delta_y);
+        let hwnd = isize_to_hwnd(target_hwnd);
+        if !hwnd.is_null() {
+            focus_hwnd(hwnd);
+        }
+
         let input = INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 {
@@ -525,7 +690,13 @@ fn scroll_down_at(x: i32, y: i32, notches: i32) {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn scroll_down_at(_x: i32, _y: i32, _notches: i32) {}
+fn scroll_at_target(_target_hwnd: isize, _x: i32, _y: i32, _scroll_delta_y: i32) {}
+
+fn wheel_delta_from_scroll(scroll_delta_y: i32) -> i32 {
+    let direction = if scroll_delta_y >= 0 { -1 } else { 1 };
+    let notches = ((scroll_delta_y.abs() as f32 / 120.0).ceil() as i32).clamp(1, 7);
+    direction * notches * 120
+}
 
 fn show_overlay(app: &AppHandle, payload: CapturePayload) -> Result<(), AppError> {
     let window = ensure_overlay_window(app)?;
@@ -704,12 +875,17 @@ fn main() {
             take_pending_capture,
             save_png_base64,
             copy_png_base64,
-            capture_long_selection
+            begin_long_capture_selection,
+            step_long_capture,
+            finish_long_capture,
+            cancel_long_capture
         ])
         .setup(|app| {
             build_tray(app)?;
             ensure_overlay_window(app.handle())?;
-            register_capture_shortcut(app.handle(), "Alt+A")?;
+            if let Err(error) = register_capture_shortcut(app.handle(), "Alt+A") {
+                eprintln!("failed to register default shortcut Alt+A: {error}");
+            }
             *app.state::<CaptureState>()
                 .shortcut
                 .lock()

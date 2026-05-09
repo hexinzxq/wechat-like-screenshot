@@ -6,11 +6,14 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   ArrowUpRight,
+  Check,
   Circle,
   Clipboard,
   Eraser,
   MousePointer2,
+  Pause,
   PenLine,
+  Play,
   RectangleHorizontal,
   Save,
   ScrollText,
@@ -25,6 +28,14 @@ import "./overlay.css";
 
 const COLORS = ["#ff4d4f", "#32d296", "#ffd166", "#55a8ff", "#ffffff"];
 
+type LongCaptureProgress = {
+  slices: number;
+  width: number;
+  height: number;
+  changed: boolean;
+  finished: boolean;
+};
+
 function insideRect(point: { x: number; y: number }, rect: Rect) {
   return (
     point.x >= rect.x &&
@@ -32,6 +43,12 @@ function insideRect(point: { x: number; y: number }, rect: Rect) {
     point.x <= rect.x + rect.width &&
     point.y <= rect.y + rect.height
   );
+}
+
+function nextPaint() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+  });
 }
 
 export default function OverlayPage() {
@@ -45,7 +62,11 @@ export default function OverlayPage() {
   const [notice, setNotice] = useState("");
   const [textDraft, setTextDraft] = useState<{ x: number; y: number; value: string } | null>(null);
   const [imageFrame, setImageFrame] = useState<Rect | null>(null);
-  const [longCapturing, setLongCapturing] = useState(false);
+  const [longMode, setLongMode] = useState(false);
+  const [longBusy, setLongBusy] = useState(false);
+  const [longSnapshotting, setLongSnapshotting] = useState(false);
+  const [autoLongCapture, setAutoLongCapture] = useState(false);
+  const [longProgress, setLongProgress] = useState<LongCaptureProgress | null>(null);
   const canvasRef = useRef<AnnotationCanvasHandle | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -86,6 +107,11 @@ export default function OverlayPage() {
     setTool("select");
     setTextDraft(null);
     setImageFrame(null);
+    setLongMode(false);
+    setLongBusy(false);
+    setLongSnapshotting(false);
+    setAutoLongCapture(false);
+    setLongProgress(null);
     setNotice("");
     canvasRef.current?.clear();
 
@@ -121,19 +147,33 @@ export default function OverlayPage() {
 
   useEffect(() => {
     function escape(event: KeyboardEvent) {
-      if (event.key === "Escape") closeOverlay();
+      if (event.key === "Escape") {
+        if (longMode) {
+          void cancelLongCapture();
+          return;
+        }
+        void closeOverlay();
+      }
     }
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
-  }, []);
+  }, [longMode]);
+
+  useEffect(() => {
+    if (!longMode || !autoLongCapture) return;
+    const timer = window.setInterval(() => {
+      void stepLongCapture(420);
+    }, 850);
+    return () => window.clearInterval(timer);
+  }, [longMode, autoLongCapture, longBusy]);
 
   const toolbarStyle = useMemo(() => {
     if (!selection) return undefined;
     const top = Math.min(window.innerHeight - 48, selection.y + selection.height + 8);
-    const maxLeft = Math.max(8, window.innerWidth - 640);
+    const maxLeft = Math.max(8, window.innerWidth - (longMode ? 190 : 640));
     const left = Math.min(maxLeft, Math.max(8, selection.x));
     return { left, top: Math.max(8, top) };
-  }, [selection]);
+  }, [selection, longMode]);
 
   function point(event: React.PointerEvent<HTMLDivElement>) {
     return { x: event.clientX, y: event.clientY };
@@ -142,7 +182,7 @@ export default function OverlayPage() {
   function beginSelect(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
     void lockWindow();
-    if (tool !== "select") return;
+    if (longMode || tool !== "select") return;
     const current = point(event);
     if (imageFrame && !insideRect(current, imageFrame)) return;
     canvasRef.current?.clear();
@@ -154,14 +194,14 @@ export default function OverlayPage() {
 
   function moveSelect(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
-    if (!dragStart || tool !== "select") return;
+    if (longMode || !dragStart || tool !== "select") return;
     const current = point(event);
     setSelection(normalizeRect(dragStart.x, dragStart.y, current.x, current.y));
   }
 
   function endSelect(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
-    if (!dragStart) return;
+    if (longMode || !dragStart) return;
     event.currentTarget.releasePointerCapture(event.pointerId);
     setDragStart(null);
     setSelection((rect) => (rect && rect.width > 8 && rect.height > 8 ? rect : null));
@@ -169,6 +209,7 @@ export default function OverlayPage() {
 
   async function closeOverlay() {
     try {
+      await invoke("cancel_long_capture").catch(() => undefined);
       await invoke("finish_capture");
     } catch {
       const win = getCurrentWebviewWindow();
@@ -181,6 +222,11 @@ export default function OverlayPage() {
       setTool("select");
       setTextDraft(null);
       setImageFrame(null);
+      setLongMode(false);
+      setLongBusy(false);
+      setLongSnapshotting(false);
+      setAutoLongCapture(false);
+      setLongProgress(null);
       canvasRef.current?.clear();
     }
   }
@@ -218,25 +264,82 @@ export default function OverlayPage() {
     await invoke("copy_png_base64", { pngBase64: dataUrlToBase64(dataUrl) });
   }
 
-  async function startLongCapture() {
-    if (!capture || !selection || imageFrame || longCapturing) return;
-    commitTextDraft();
-    canvasRef.current?.clear();
-    setLongCapturing(true);
-    setNotice("正在长截图...");
-
+  function buildLongCaptureRequest() {
+    if (!capture || !selection) return null;
     const scaleX = capture.width / Math.max(1, window.innerWidth);
     const scaleY = capture.height / Math.max(1, window.innerHeight);
-    const request = {
+    return {
       sourceX: Math.max(0, Math.round(selection.x * scaleX)),
       sourceY: Math.max(0, Math.round(selection.y * scaleY)),
       sourceWidth: Math.max(80, Math.round(selection.width * scaleX)),
       sourceHeight: Math.max(80, Math.round(selection.height * scaleY)),
-      maxSlices: 10
+      maxSlices: 60
     };
+  }
+
+  async function startLongCapture() {
+    if (!capture || !selection || imageFrame || longBusy) return;
+    const request = buildLongCaptureRequest();
+    if (!request) return;
+
+    commitTextDraft();
+    canvasRef.current?.clear();
+    setLongMode(true);
+    setAutoLongCapture(false);
+    setLongProgress(null);
+    setTool("select");
+    setNotice("长截图中：滚动选区继续，点完成结束");
+    setLongBusy(true);
+    setLongSnapshotting(true);
 
     try {
-      const longPayload = await invoke<CapturePayload>("capture_long_selection", { request });
+      await nextPaint();
+      const progress = await invoke<LongCaptureProgress>("begin_long_capture_selection", { request });
+      setLongProgress(progress);
+    } catch (error) {
+      const win = getCurrentWebviewWindow();
+      await win.show();
+      await win.setFocus();
+      await lockWindow();
+      setLongMode(false);
+      setNotice(String(error || "长截图失败"));
+    } finally {
+      setLongSnapshotting(false);
+      setLongBusy(false);
+    }
+  }
+
+  async function stepLongCapture(scrollDeltaY = 420) {
+    if (!longMode || longBusy) return;
+    setLongBusy(true);
+    setLongSnapshotting(true);
+    try {
+      await nextPaint();
+      const progress = await invoke<LongCaptureProgress>("step_long_capture", {
+        scrollDeltaY: Math.round(scrollDeltaY)
+      });
+      setLongProgress(progress);
+      if (!progress.changed) {
+        setAutoLongCapture(false);
+        setNotice("没有检测到新内容，可以点完成结束");
+      } else {
+        setNotice(`长截图中：已拼接 ${progress.slices} 屏`);
+      }
+    } catch (error) {
+      setAutoLongCapture(false);
+      setNotice(String(error || "长截图采集失败"));
+    } finally {
+      setLongSnapshotting(false);
+      setLongBusy(false);
+    }
+  }
+
+  async function finishLongCapture() {
+    if (!capture || !longMode || longBusy) return;
+    setLongBusy(true);
+    setAutoLongCapture(false);
+    try {
+      const longPayload = await invoke<CapturePayload>("finish_long_capture");
       await presentCapture(
         {
           ...longPayload,
@@ -249,14 +352,29 @@ export default function OverlayPage() {
       );
       setNotice("长截图完成，可以继续标注、复制或保存");
     } catch (error) {
-      const win = getCurrentWebviewWindow();
-      await win.show();
-      await win.setFocus();
-      await lockWindow();
-      setNotice(String(error || "长截图失败"));
+      setNotice(String(error || "长截图结束失败"));
     } finally {
-      setLongCapturing(false);
+      setLongBusy(false);
     }
+  }
+
+  async function cancelLongCapture() {
+    await invoke("cancel_long_capture").catch(() => undefined);
+    setLongMode(false);
+    setLongBusy(false);
+    setLongSnapshotting(false);
+    setAutoLongCapture(false);
+    setLongProgress(null);
+    setNotice("");
+  }
+
+  function handleWheel(event: React.WheelEvent<HTMLElement>) {
+    if (!longMode || !selection) return;
+    const current = { x: event.clientX, y: event.clientY };
+    if (!insideRect(current, selection)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void stepLongCapture(event.deltaY || 420);
   }
 
   if (!capture) {
@@ -265,18 +383,20 @@ export default function OverlayPage() {
 
   return (
     <main
-      className="overlay-root"
+      className={`overlay-root${longMode ? " long-mode" : ""}`}
       onDragStart={(event) => event.preventDefault()}
       onContextMenu={(event) => event.preventDefault()}
       onPointerDown={beginSelect}
       onPointerMove={moveSelect}
       onPointerUp={endSelect}
+      onWheel={handleWheel}
     >
       <AnnotationCanvas
         ref={canvasRef}
         image={image}
         imageDataUrl={capture.imageDataUrl}
         imageFrame={imageFrame}
+        showImage={!longMode}
         selection={selection}
         tool={tool}
         color={color}
@@ -296,75 +416,108 @@ export default function OverlayPage() {
             style={{ top: selection.y, left: selection.x + selection.width, height: selection.height }}
           />
           <div className="mask bottom" style={{ top: selection.y + selection.height }} />
-          <div
-            className="selection-box"
-            style={{ left: selection.x, top: selection.y, width: selection.width, height: selection.height }}
-          />
-          <div
-            className="toolbar"
-            style={toolbarStyle}
-            onPointerDown={(event) => event.stopPropagation()}
-            onPointerUp={(event) => event.stopPropagation()}
-          >
-            <button className={tool === "select" ? "active" : ""} title="选择" onClick={() => setTool("select")}>
-              <MousePointer2 size={17} />
-            </button>
-            <button className={tool === "rect" ? "active" : ""} title="矩形" onClick={() => setTool("rect")}>
-              <RectangleHorizontal size={17} />
-            </button>
-            <button className={tool === "ellipse" ? "active" : ""} title="圆形" onClick={() => setTool("ellipse")}>
-              <Circle size={17} />
-            </button>
-            <button className={tool === "arrow" ? "active" : ""} title="箭头" onClick={() => setTool("arrow")}>
-              <ArrowUpRight size={17} />
-            </button>
-            <button className={tool === "pen" ? "active" : ""} title="画笔" onClick={() => setTool("pen")}>
-              <PenLine size={17} />
-            </button>
-            <button className={tool === "text" ? "active" : ""} title="文字" onClick={() => setTool("text")}>
-              <Type size={17} />
-            </button>
-            <div className="divider" />
-            {COLORS.map((item) => (
-              <button
-                key={item}
-                className="swatch"
-                style={{ color: item }}
-                title={item}
-                onClick={() => setColor(item)}
-              >
-                <span style={{ background: item }} />
-              </button>
-            ))}
-            <input
-              className="line-width"
-              type="range"
-              min={1}
-              max={10}
-              value={lineWidth}
-              onChange={(event) => setLineWidth(Number(event.target.value))}
-              title="线宽"
+          {!longSnapshotting && (
+            <div
+              className="selection-box"
+              style={{ left: selection.x, top: selection.y, width: selection.width, height: selection.height }}
             />
-            <div className="divider" />
-            <button title="撤销" onClick={() => canvasRef.current?.undo()}>
-              <Undo2 size={17} />
-            </button>
-            <button title="清空标注" onClick={() => canvasRef.current?.clear()}>
-              <Eraser size={17} />
-            </button>
-            <button title="长截图" disabled={longCapturing || !!imageFrame} onClick={startLongCapture}>
-              <ScrollText size={17} />
-            </button>
-            <button title="复制" onClick={copySelection}>
-              <Clipboard size={17} />
-            </button>
-            <button title="保存" onClick={saveSelection}>
-              <Save size={17} />
-            </button>
-            <button title="取消" onClick={closeOverlay}>
-              <X size={17} />
-            </button>
-          </div>
+          )}
+          {!longSnapshotting && (
+            <div
+              className="toolbar"
+              style={toolbarStyle}
+              onPointerDown={(event) => event.stopPropagation()}
+              onPointerUp={(event) => event.stopPropagation()}
+              onWheel={(event) => event.stopPropagation()}
+            >
+              {longMode ? (
+                <>
+                  <button
+                    className={autoLongCapture ? "active" : ""}
+                    title={autoLongCapture ? "停止自动滚动" : "自动滚动"}
+                    disabled={longBusy && !autoLongCapture}
+                    onClick={() => setAutoLongCapture((value) => !value)}
+                  >
+                    {autoLongCapture ? <Pause size={17} /> : <Play size={17} />}
+                  </button>
+                  <button title="采集下一屏" disabled={longBusy} onClick={() => stepLongCapture(420)}>
+                    <ScrollText size={17} />
+                  </button>
+                  <button title="完成长截图" disabled={longBusy} onClick={finishLongCapture}>
+                    <Check size={17} />
+                  </button>
+                  <button title="取消长截图" onClick={cancelLongCapture}>
+                    <X size={17} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button className={tool === "select" ? "active" : ""} title="选择" onClick={() => setTool("select")}>
+                    <MousePointer2 size={17} />
+                  </button>
+                  <button className={tool === "rect" ? "active" : ""} title="矩形" onClick={() => setTool("rect")}>
+                    <RectangleHorizontal size={17} />
+                  </button>
+                  <button
+                    className={tool === "ellipse" ? "active" : ""}
+                    title="圆形"
+                    onClick={() => setTool("ellipse")}
+                  >
+                    <Circle size={17} />
+                  </button>
+                  <button className={tool === "arrow" ? "active" : ""} title="箭头" onClick={() => setTool("arrow")}>
+                    <ArrowUpRight size={17} />
+                  </button>
+                  <button className={tool === "pen" ? "active" : ""} title="画笔" onClick={() => setTool("pen")}>
+                    <PenLine size={17} />
+                  </button>
+                  <button className={tool === "text" ? "active" : ""} title="文字" onClick={() => setTool("text")}>
+                    <Type size={17} />
+                  </button>
+                  <div className="divider" />
+                  {COLORS.map((item) => (
+                    <button
+                      key={item}
+                      className="swatch"
+                      style={{ color: item }}
+                      title={item}
+                      onClick={() => setColor(item)}
+                    >
+                      <span style={{ background: item }} />
+                    </button>
+                  ))}
+                  <input
+                    className="line-width"
+                    type="range"
+                    min={1}
+                    max={10}
+                    value={lineWidth}
+                    onChange={(event) => setLineWidth(Number(event.target.value))}
+                    title="线宽"
+                  />
+                  <div className="divider" />
+                  <button title="撤销" onClick={() => canvasRef.current?.undo()}>
+                    <Undo2 size={17} />
+                  </button>
+                  <button title="清空标注" onClick={() => canvasRef.current?.clear()}>
+                    <Eraser size={17} />
+                  </button>
+                  <button title="长截图" disabled={longBusy || !!imageFrame} onClick={startLongCapture}>
+                    <ScrollText size={17} />
+                  </button>
+                  <button title="复制" onClick={copySelection}>
+                    <Clipboard size={17} />
+                  </button>
+                  <button title="保存" onClick={saveSelection}>
+                    <Save size={17} />
+                  </button>
+                  <button title="取消" onClick={closeOverlay}>
+                    <X size={17} />
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </>
       )}
 
@@ -389,7 +542,12 @@ export default function OverlayPage() {
       )}
 
       {!selection && <div className="hint">拖拽框选截图区域，按 Esc 取消</div>}
-      {notice && <div className="notice">{notice}</div>}
+      {notice && (
+        <div className="notice">
+          {notice}
+          {longMode && longProgress ? ` · ${longProgress.height}px` : ""}
+        </div>
+      )}
     </main>
   );
 }

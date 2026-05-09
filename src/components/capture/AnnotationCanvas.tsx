@@ -17,6 +17,7 @@ type Props = {
   image: HTMLImageElement | null;
   imageDataUrl: string;
   imageFrame?: Rect | null;
+  showImage?: boolean;
   selection: Rect | null;
   tool: AnnotationTool;
   color: string;
@@ -108,7 +109,7 @@ function shapeId() {
 }
 
 export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(function AnnotationCanvas(
-  { image, imageDataUrl, imageFrame, selection, tool, color, lineWidth, onTextPoint },
+  { image, imageDataUrl, imageFrame, showImage = true, selection, tool, color, lineWidth, onTextPoint },
   ref
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -283,23 +284,25 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
 
   return (
     <>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        className={`capture-image${imageFrame ? " framed" : ""}`}
-        src={imageDataUrl}
-        alt=""
-        draggable={false}
-        style={
-          imageFrame
-            ? {
-                left: imageFrame.x,
-                top: imageFrame.y,
-                width: imageFrame.width,
-                height: imageFrame.height
-              }
-            : undefined
-        }
-      />
+      {showImage && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          className={`capture-image${imageFrame ? " framed" : ""}`}
+          src={imageDataUrl}
+          alt=""
+          draggable={false}
+          style={
+            imageFrame
+              ? {
+                  left: imageFrame.x,
+                  top: imageFrame.y,
+                  width: imageFrame.width,
+                  height: imageFrame.height
+                }
+              : undefined
+          }
+        />
+      )}
       <canvas
         ref={canvasRef}
         className="annotation-canvas"
