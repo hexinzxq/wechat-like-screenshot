@@ -96,10 +96,6 @@ export const ExcalidrawLayer = forwardRef<ExcalidrawLayerHandle, Props>(function
         width: selection.width,
         height: selection.height
       }}
-      onPointerDown={(event) => event.stopPropagation()}
-      onPointerMove={(event) => event.stopPropagation()}
-      onPointerUp={(event) => event.stopPropagation()}
-      onWheel={(event) => event.stopPropagation()}
     >
       <Excalidraw
         excalidrawAPI={(api: any) => {

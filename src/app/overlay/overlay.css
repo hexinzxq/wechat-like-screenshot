@@ -55,11 +55,21 @@ body {
   border: 1px solid rgba(50, 210, 150, 0.28);
   background: rgba(0, 0, 0, 0.01);
   pointer-events: none;
+  touch-action: auto;
+  user-select: auto;
 }
 
 .excalidraw-layer.active {
   background: rgba(8, 12, 14, 0.18);
   pointer-events: auto;
+}
+
+.excalidraw-layer *,
+.excalidraw-layer *::before,
+.excalidraw-layer *::after {
+  touch-action: auto;
+  user-select: auto;
+  -webkit-user-drag: auto;
 }
 
 .excalidraw-layer .excalidraw,
