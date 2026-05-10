@@ -386,19 +386,12 @@ async fn step_long_capture(
     let capture_result = tauri::async_runtime::spawn_blocking(move || {
         if scroll_delta_y != 0 {
             scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
-            std::thread::sleep(Duration::from_millis(90));
+            std::thread::sleep(Duration::from_millis(120));
         } else {
             std::thread::sleep(Duration::from_millis(70));
         }
 
-        let desktop = capture_desktop_image()?;
-        crop_desktop_area(
-            &desktop.image,
-            request.source_x,
-            request.source_y,
-            request.source_width,
-            request.source_height,
-        )
+        capture_stable_long_crop(&request)
     })
     .await;
     if scroll_delta_y != 0 {
@@ -716,6 +709,40 @@ fn crop_desktop_area(
     let crop_width = width.min(image.width() - x).max(1);
     let crop_height = height.min(image.height() - y).max(1);
     Ok(imageops::crop_imm(image, x, y, crop_width, crop_height).to_image())
+}
+
+fn capture_stable_long_crop(request: &LongCaptureRequest) -> Result<RgbaImage, AppError> {
+    let mut previous: Option<RgbaImage> = None;
+    let mut stable_hits = 0;
+    let mut latest: Option<RgbaImage> = None;
+
+    for _ in 0..7 {
+        let desktop = capture_desktop_image()?;
+        let current = crop_desktop_area(
+            &desktop.image,
+            request.source_x,
+            request.source_y,
+            request.source_width,
+            request.source_height,
+        )?;
+
+        if let Some(previous_crop) = previous.as_ref() {
+            if sampled_diff(previous_crop, &current, 0, 0, current.height()) < 1.6 {
+                stable_hits += 1;
+                if stable_hits >= 2 {
+                    return Ok(current);
+                }
+            } else {
+                stable_hits = 0;
+            }
+        }
+
+        previous = Some(current.clone());
+        latest = Some(current);
+        std::thread::sleep(Duration::from_millis(45));
+    }
+
+    latest.ok_or_else(|| AppError::Message("长截图稳定帧采集失败".into()))
 }
 
 fn append_slice(
