@@ -1,5 +1,7 @@
 # 截图绘图功能移植说明
 
+如果你只想移植 Excalidraw 高级绘图能力，请看：[Excalidraw 绘图功能移植教程](docs/excalidraw-migration-guide.md)。
+
 这份说明只讲一件事：如果你想把本项目里的截图标注/绘图功能移植到别的 React 项目里，应该拷哪些文件、看哪些方法、怎么最快跑起来。
 
 项目整体是 Tauri + Next.js + React，但绘图功能本身主要在前端，和 Tauri 的关系不大。你要移植绘图能力时，优先看 `src/components/capture/AnnotationCanvas.tsx` 和 `src/app/overlay/page.tsx`。
