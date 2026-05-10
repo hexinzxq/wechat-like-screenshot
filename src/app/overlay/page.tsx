@@ -46,6 +46,8 @@ type LongCaptureProgress = {
   previewImageDataUrl?: string | null;
 };
 
+type PendingLongAction = "finish" | "cancel" | null;
+
 type ToolbarPlacement = {
   left: number;
   top: number;
@@ -100,6 +102,7 @@ export default function OverlayPage() {
   const selectionBeforeDragRef = useRef<Rect | null>(null);
   const clickWindowRef = useRef<Rect | null>(null);
   const pendingLongDeltaRef = useRef(0);
+  const pendingLongActionRef = useRef<PendingLongAction>(null);
   const longStepRunningRef = useRef(false);
 
   async function lockWindow(payload = capture) {
@@ -428,6 +431,7 @@ export default function OverlayPage() {
     setLongMode(true);
     setAutoLongCapture(false);
     pendingLongDeltaRef.current = 0;
+    pendingLongActionRef.current = null;
     longStepRunningRef.current = false;
     setLongProgress(null);
     setLongPreviewUrl(null);
@@ -480,6 +484,16 @@ export default function OverlayPage() {
     } finally {
       longStepRunningRef.current = false;
       setLongBusy(false);
+      const pendingAction = pendingLongActionRef.current;
+      pendingLongActionRef.current = null;
+      if (pendingAction === "finish") {
+        window.setTimeout(() => void finishLongCapture(), 0);
+        return;
+      }
+      if (pendingAction === "cancel") {
+        window.setTimeout(() => void cancelLongCapture(), 0);
+        return;
+      }
       const pendingDelta = pendingLongDeltaRef.current;
       pendingLongDeltaRef.current = 0;
       if (pendingDelta && longMode && !autoLongCapture) {
@@ -498,11 +512,22 @@ export default function OverlayPage() {
     void runLongCaptureStep(scrollDeltaY);
   }
 
+  function pauseLongCapture() {
+    pendingLongDeltaRef.current = 0;
+    setAutoLongCapture(false);
+    setNotice("已暂停自动滚动");
+  }
+
   async function finishLongCapture() {
     if (!capture || !longMode) return;
     pendingLongDeltaRef.current = 0;
-    setLongBusy(true);
     setAutoLongCapture(false);
+    if (longStepRunningRef.current) {
+      pendingLongActionRef.current = "finish";
+      setNotice("正在完成当前采集帧，马上生成长图");
+      return;
+    }
+    setLongBusy(true);
     try {
       const longPayload = await invoke<CapturePayload>("finish_long_capture");
       await presentCapture(
@@ -525,6 +550,13 @@ export default function OverlayPage() {
 
   async function cancelLongCapture() {
     pendingLongDeltaRef.current = 0;
+    pendingLongActionRef.current = null;
+    setAutoLongCapture(false);
+    if (longStepRunningRef.current) {
+      pendingLongActionRef.current = "cancel";
+      setNotice("正在停止长截图");
+      return;
+    }
     longStepRunningRef.current = false;
     await invoke("cancel_long_capture").catch(() => undefined);
     setLongMode(false);
@@ -616,7 +648,15 @@ export default function OverlayPage() {
                     className={autoLongCapture ? "active" : ""}
                     title={autoLongCapture ? "停止自动滚动" : "自动滚动"}
                     disabled={longBusy && !autoLongCapture}
-                    onClick={() => setAutoLongCapture((value) => !value)}
+                    onClick={() => {
+                      if (autoLongCapture) {
+                        pauseLongCapture();
+                      } else {
+                        pendingLongDeltaRef.current = 0;
+                        pendingLongActionRef.current = null;
+                        setAutoLongCapture(true);
+                      }
+                    }}
                   >
                     {autoLongCapture ? <Pause size={17} /> : <Play size={17} />}
                   </button>
