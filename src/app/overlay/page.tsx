@@ -450,7 +450,6 @@ export default function OverlayPage() {
     setLongBusy(true);
     const delta = Math.round(scrollDeltaY || 120);
     try {
-      await invoke("scroll_long_capture_view", { scrollDeltaY: delta });
       const progress = await invoke<LongCaptureProgress>("step_long_capture", {
         scrollDeltaY: delta
       });

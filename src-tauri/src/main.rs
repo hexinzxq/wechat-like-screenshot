@@ -373,48 +373,13 @@ async fn begin_long_capture_selection(
 }
 
 #[tauri::command]
-async fn scroll_long_capture_view(
-    app: AppHandle,
-    scroll_delta_y: i32,
-) -> Result<(), AppError> {
-    if scroll_delta_y == 0 {
-        return Ok(());
-    }
-
-    let state = app.state::<CaptureState>();
-    let generation = state.long_generation.load(Ordering::SeqCst);
-    let (cursor_x, cursor_y, target_hwnd) = {
-        let session = state
-            .long_session
-            .lock()
-            .map_err(|_| AppError::Message("长截图状态读取失败".into()))?;
-        let Some(session) = session.as_ref() else {
-            return Err(AppError::Message("长截图尚未开始".into()));
-        };
-        (session.cursor_x, session.cursor_y, session.target_hwnd)
-    };
-
-    set_overlay_ignore_cursor(&app, true)?;
-    let scroll_app = app.clone();
-    let scroll_result = tauri::async_runtime::spawn_blocking(move || {
-        ensure_long_capture_active(&scroll_app, generation)?;
-        scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
-        Ok::<_, AppError>(())
-    })
-    .await;
-    let _ = set_overlay_ignore_cursor(&app, false);
-    scroll_result.map_err(|error| AppError::Message(format!("长截图滚动失败：{error}")))??;
-    Ok(())
-}
-
-#[tauri::command]
 async fn step_long_capture(
     app: AppHandle,
     scroll_delta_y: i32,
 ) -> Result<LongCaptureProgress, AppError> {
     let state = app.state::<CaptureState>();
     let generation = state.long_generation.load(Ordering::SeqCst);
-    let request = {
+    let (request, cursor_x, cursor_y, target_hwnd) = {
         let session = state
             .long_session
             .lock()
@@ -422,15 +387,32 @@ async fn step_long_capture(
         let Some(session) = session.as_ref() else {
             return Err(AppError::Message("长截图尚未开始".into()));
         };
-        session.request.clone()
+        (
+            session.request.clone(),
+            session.cursor_x,
+            session.cursor_y,
+            session.target_hwnd,
+        )
     };
 
+    if scroll_delta_y != 0 {
+        set_overlay_ignore_cursor(&app, true)?;
+    }
     let step_app = app.clone();
     let capture_result = tauri::async_runtime::spawn_blocking(move || {
-        sleep_for_long_capture(&step_app, generation, Duration::from_millis(28))?;
+        ensure_long_capture_active(&step_app, generation)?;
+        if scroll_delta_y != 0 {
+            scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
+            sleep_for_long_capture(&step_app, generation, Duration::from_millis(70))?;
+        } else {
+            sleep_for_long_capture(&step_app, generation, Duration::from_millis(32))?;
+        }
         capture_long_candidates(&step_app, generation, &request, 3, Duration::from_millis(24))
     })
     .await;
+    if scroll_delta_y != 0 {
+        let _ = set_overlay_ignore_cursor(&app, false);
+    }
     let candidates =
         capture_result.map_err(|error| AppError::Message(format!("长截图采集失败：{error}")))??;
 
@@ -1482,7 +1464,6 @@ fn main() {
             save_png_base64,
             copy_png_base64,
             begin_long_capture_selection,
-            scroll_long_capture_view,
             step_long_capture,
             finish_long_capture,
             request_long_capture_stop,
