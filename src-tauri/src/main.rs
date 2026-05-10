@@ -3,7 +3,10 @@
 use std::{
     borrow::Cow,
     io::Cursor,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -65,6 +68,7 @@ struct CaptureState {
     in_progress: Mutex<bool>,
     pending_capture: Mutex<Option<CapturePayload>>,
     long_session: Mutex<Option<LongCaptureSession>>,
+    long_generation: AtomicU64,
     shortcut: Mutex<String>,
 }
 
@@ -300,6 +304,8 @@ async fn begin_long_capture_selection(
     request: LongCaptureRequest,
 ) -> Result<LongCaptureProgress, AppError> {
     let request = normalize_long_request(request);
+    let state = app.state::<CaptureState>();
+    state.long_generation.fetch_add(1, Ordering::SeqCst);
     set_overlay_ignore_cursor(&app, true)?;
 
     let capture_result = tauri::async_runtime::spawn_blocking({
@@ -339,7 +345,6 @@ async fn begin_long_capture_selection(
         preview_image_data_url,
     };
 
-    let state = app.state::<CaptureState>();
     *state
         .long_session
         .lock()
@@ -364,6 +369,7 @@ async fn step_long_capture(
     scroll_delta_y: i32,
 ) -> Result<LongCaptureProgress, AppError> {
     let state = app.state::<CaptureState>();
+    let generation = state.long_generation.load(Ordering::SeqCst);
     let (request, cursor_x, cursor_y, target_hwnd) = {
         let session = state
             .long_session
@@ -380,15 +386,17 @@ async fn step_long_capture(
         )
     };
 
+    let step_app = app.clone();
     let capture_result = tauri::async_runtime::spawn_blocking(move || {
+        ensure_long_capture_active(&step_app, generation)?;
         if scroll_delta_y != 0 {
             scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
-            std::thread::sleep(Duration::from_millis(120));
+            sleep_for_long_capture(&step_app, generation, Duration::from_millis(120))?;
         } else {
-            std::thread::sleep(Duration::from_millis(70));
+            sleep_for_long_capture(&step_app, generation, Duration::from_millis(70))?;
         }
 
-        capture_stable_long_crop(&request)
+        capture_stable_long_crop(&step_app, generation, &request)
     })
     .await;
     let current =
@@ -401,6 +409,10 @@ async fn step_long_capture(
     let Some(session) = session.as_mut() else {
         return Err(AppError::Message("长截图尚未开始".into()));
     };
+
+    if generation != state.long_generation.load(Ordering::SeqCst) {
+        return Err(AppError::Message("长截图采集已停止".into()));
+    }
 
     let mut changed = false;
     if !images_are_similar(&session.previous, &current) {
@@ -457,6 +469,7 @@ async fn step_long_capture(
 async fn finish_long_capture(
     state: tauri::State<'_, CaptureState>,
 ) -> Result<CapturePayload, AppError> {
+    state.long_generation.fetch_add(1, Ordering::SeqCst);
     let session = state
         .long_session
         .lock()
@@ -476,7 +489,14 @@ async fn finish_long_capture(
 }
 
 #[tauri::command]
+async fn request_long_capture_stop(state: tauri::State<'_, CaptureState>) -> Result<(), AppError> {
+    state.long_generation.fetch_add(1, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
 async fn cancel_long_capture(state: tauri::State<'_, CaptureState>) -> Result<(), AppError> {
+    state.long_generation.fetch_add(1, Ordering::SeqCst);
     state
         .long_session
         .lock()
@@ -705,12 +725,46 @@ fn crop_desktop_area(
     Ok(imageops::crop_imm(image, x, y, crop_width, crop_height).to_image())
 }
 
-fn capture_stable_long_crop(request: &LongCaptureRequest) -> Result<RgbaImage, AppError> {
+fn ensure_long_capture_active(app: &AppHandle, generation: u64) -> Result<(), AppError> {
+    let current = app
+        .state::<CaptureState>()
+        .long_generation
+        .load(Ordering::SeqCst);
+    if current == generation {
+        Ok(())
+    } else {
+        Err(AppError::Message("长截图采集已停止".into()))
+    }
+}
+
+fn sleep_for_long_capture(
+    app: &AppHandle,
+    generation: u64,
+    duration: Duration,
+) -> Result<(), AppError> {
+    let mut elapsed = Duration::ZERO;
+    let slice = Duration::from_millis(20);
+    while elapsed < duration {
+        ensure_long_capture_active(app, generation)?;
+        let rest = duration.saturating_sub(elapsed);
+        let wait = rest.min(slice);
+        std::thread::sleep(wait);
+        elapsed += wait;
+    }
+    ensure_long_capture_active(app, generation)
+}
+
+fn capture_stable_long_crop(
+    app: &AppHandle,
+    generation: u64,
+    request: &LongCaptureRequest,
+) -> Result<RgbaImage, AppError> {
     let mut previous: Option<RgbaImage> = None;
     let mut stable_hits = 0;
     let mut latest: Option<RgbaImage> = None;
 
     for _ in 0..7 {
+        ensure_long_capture_active(app, generation)?;
         let desktop = capture_desktop_image()?;
         let current = crop_desktop_area(
             &desktop.image,
@@ -733,7 +787,7 @@ fn capture_stable_long_crop(request: &LongCaptureRequest) -> Result<RgbaImage, A
 
         previous = Some(current.clone());
         latest = Some(current);
-        std::thread::sleep(Duration::from_millis(45));
+        sleep_for_long_capture(app, generation, Duration::from_millis(45))?;
     }
 
     latest.ok_or_else(|| AppError::Message("长截图稳定帧采集失败".into()))
@@ -1356,6 +1410,7 @@ fn main() {
             begin_long_capture_selection,
             step_long_capture,
             finish_long_capture,
+            request_long_capture_stop,
             cancel_long_capture
         ])
         .setup(|app| {

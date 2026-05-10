@@ -480,7 +480,10 @@ export default function OverlayPage() {
       }
     } catch (error) {
       setAutoLongCapture(false);
-      setNotice(String(error || "长截图采集失败"));
+      const message = String(error || "长截图采集失败");
+      if (!pendingLongActionRef.current && !message.includes("已停止")) {
+        setNotice(message);
+      }
     } finally {
       longStepRunningRef.current = false;
       setLongBusy(false);
@@ -514,6 +517,7 @@ export default function OverlayPage() {
 
   function pauseLongCapture() {
     pendingLongDeltaRef.current = 0;
+    void invoke("request_long_capture_stop").catch(() => undefined);
     setAutoLongCapture(false);
     setNotice("已暂停自动滚动");
   }
@@ -524,6 +528,7 @@ export default function OverlayPage() {
     setAutoLongCapture(false);
     if (longStepRunningRef.current) {
       pendingLongActionRef.current = "finish";
+      void invoke("request_long_capture_stop").catch(() => undefined);
       setNotice("正在完成当前采集帧，马上生成长图");
       return;
     }
@@ -554,6 +559,7 @@ export default function OverlayPage() {
     setAutoLongCapture(false);
     if (longStepRunningRef.current) {
       pendingLongActionRef.current = "cancel";
+      void invoke("cancel_long_capture").catch(() => undefined);
       setNotice("正在停止长截图");
       return;
     }
