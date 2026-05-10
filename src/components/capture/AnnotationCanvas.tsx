@@ -63,6 +63,19 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: AnnotationShape, offset
     ctx.strokeRect(start.x, start.y, end.x - start.x, end.y - start.y);
   }
 
+  if (shape.type === "diamond" && points.length >= 2) {
+    const [start, end] = points;
+    const centerX = (start.x + end.x) / 2;
+    const centerY = (start.y + end.y) / 2;
+    ctx.beginPath();
+    ctx.moveTo(centerX, start.y);
+    ctx.lineTo(end.x, centerY);
+    ctx.lineTo(centerX, end.y);
+    ctx.lineTo(start.x, centerY);
+    ctx.closePath();
+    ctx.stroke();
+  }
+
   if (shape.type === "ellipse" && points.length >= 2) {
     const [start, end] = points;
     ctx.beginPath();

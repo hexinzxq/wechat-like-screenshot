@@ -17,6 +17,7 @@ export type CapturePayload = {
 export type AnnotationTool =
   | "select"
   | "rect"
+  | "diamond"
   | "ellipse"
   | "arrow"
   | "pen"
@@ -26,7 +27,7 @@ export type AnnotationTool =
 export type AnnotationShape =
   | {
       id: string;
-      type: "rect" | "ellipse" | "arrow" | "pen";
+      type: "rect" | "diamond" | "ellipse" | "arrow" | "pen";
       color: string;
       lineWidth: number;
       points: Array<{ x: number; y: number }>;

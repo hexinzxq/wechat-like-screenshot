@@ -9,6 +9,7 @@ import {
   ArrowUpRight,
   Circle,
   Clipboard,
+  Diamond,
   Eraser,
   MousePointer2,
   PenLine,
@@ -140,7 +141,7 @@ export default function OverlayPage() {
 
   const toolbarLayout = useMemo<ToolbarLayout | undefined>(() => {
     if (!selection) return undefined;
-    const captureToolbarWidth = 640;
+    const captureToolbarWidth = 720;
     const hasExcalidrawToolbar = tool === "excalidraw";
     const stackWidth = Math.max(captureToolbarWidth, hasExcalidrawToolbar ? EXCALIDRAW_TOOLBAR_WIDTH : 0);
     const stackHeight =
@@ -369,6 +370,9 @@ export default function OverlayPage() {
               </button>
               <button className={tool === "rect" ? "active" : ""} title="矩形" onClick={() => setTool("rect")}>
                 <RectangleHorizontal size={17} />
+              </button>
+              <button className={tool === "diamond" ? "active" : ""} title="菱形" onClick={() => setTool("diamond")}>
+                <Diamond size={17} />
               </button>
               <button
                 className={tool === "ellipse" ? "active" : ""}
