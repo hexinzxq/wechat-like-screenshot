@@ -18,7 +18,6 @@ export type AnnotationCanvasHandle = {
 type Props = {
   image: HTMLImageElement | null;
   imageDataUrl: string;
-  imageFrame?: Rect | null;
   showImage?: boolean;
   selection: Rect | null;
   tool: AnnotationTool;
@@ -115,7 +114,6 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
   {
     image,
     imageDataUrl,
-    imageFrame,
     showImage = true,
     selection,
     tool,
@@ -162,9 +160,12 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
     () => ({
       async exportSelection() {
         if (!selection || !image) return null;
-        const viewportWidth = Math.max(1, window.innerWidth);
-        const viewportHeight = Math.max(1, window.innerHeight);
-        const frame = imageFrame ?? { x: 0, y: 0, width: viewportWidth, height: viewportHeight };
+        const frame = {
+          x: 0,
+          y: 0,
+          width: Math.max(1, window.innerWidth),
+          height: Math.max(1, window.innerHeight)
+        };
         const clipped = {
           x: Math.max(selection.x, frame.x),
           y: Math.max(selection.y, frame.y),
@@ -246,7 +247,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
         excalidrawRef.current?.clear();
       }
     }),
-    [image, imageFrame, selection, shapes]
+    [image, selection, shapes, tool]
   );
 
   function pointerPoint(event: React.PointerEvent<HTMLCanvasElement>) {
@@ -321,20 +322,10 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
       {showImage && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          className={`capture-image${imageFrame ? " framed" : ""}`}
+          className="capture-image"
           src={imageDataUrl}
           alt=""
           draggable={false}
-          style={
-            imageFrame
-              ? {
-                  left: imageFrame.x,
-                  top: imageFrame.y,
-                  width: imageFrame.width,
-                  height: imageFrame.height
-                }
-              : undefined
-          }
         />
       )}
       <canvas
