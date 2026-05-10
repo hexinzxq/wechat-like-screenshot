@@ -32,8 +32,8 @@ use windows_sys::Win32::{
             SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT,
         },
         WindowsAndMessaging::{
-            EnumWindows, GetWindowRect, IsIconic, IsWindowVisible, PostMessageW, SetCursorPos,
-            SetForegroundWindow, WindowFromPoint, WM_MOUSEWHEEL,
+            EnumWindows, GetCursorPos, GetWindowRect, IsIconic, IsWindowVisible, SetCursorPos,
+            SetForegroundWindow, WindowFromPoint,
         },
     },
 };
@@ -386,16 +386,28 @@ async fn step_long_capture(
         )
     };
 
+    if scroll_delta_y != 0 {
+        set_overlay_ignore_cursor(&app, true)?;
+        let scroll_app = app.clone();
+        let scroll_result = tauri::async_runtime::spawn_blocking(move || {
+            ensure_long_capture_active(&scroll_app, generation)?;
+            scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
+            Ok::<_, AppError>(())
+        })
+        .await;
+        let _ = set_overlay_ignore_cursor(&app, false);
+        scroll_result
+            .map_err(|error| AppError::Message(format!("长截图滚动失败：{error}")))??;
+    }
+
     let step_app = app.clone();
     let capture_result = tauri::async_runtime::spawn_blocking(move || {
-        ensure_long_capture_active(&step_app, generation)?;
-        if scroll_delta_y != 0 {
-            scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
-            sleep_for_long_capture(&step_app, generation, Duration::from_millis(120))?;
+        let settle_time = if scroll_delta_y != 0 {
+            Duration::from_millis(120)
         } else {
-            sleep_for_long_capture(&step_app, generation, Duration::from_millis(70))?;
-        }
-
+            Duration::from_millis(70)
+        };
+        sleep_for_long_capture(&step_app, generation, settle_time)?;
         capture_stable_long_crop(&step_app, generation, &request)
     })
     .await;
@@ -1174,13 +1186,19 @@ fn scroll_at_target(target_hwnd: isize, x: i32, y: i32, scroll_delta_y: i32) {
 
         let direction = wheel_delta.signum();
         let notches = (wheel_delta.unsigned_abs() / 120).max(1) as i32;
-        let point_lparam = pack_mouse_lparam(x, y);
+        let mut restore_point = POINT { x, y };
+        let should_restore_cursor = GetCursorPos(&mut restore_point) != 0;
+        SetCursorPos(x, y);
 
         for index in 0..notches {
-            post_wheel_delta(hwnd, direction * 120, point_lparam);
+            send_wheel_delta(direction * 120);
             if index + 1 < notches {
                 std::thread::sleep(Duration::from_millis(18));
             }
+        }
+
+        if should_restore_cursor {
+            SetCursorPos(restore_point.x, restore_point.y);
         }
     }
 }
@@ -1204,24 +1222,6 @@ unsafe fn send_wheel_delta(delta: i32) {
         },
     };
     SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
-}
-
-#[cfg(target_os = "windows")]
-fn pack_mouse_lparam(x: i32, y: i32) -> LPARAM {
-    let low = (x as i16 as u16) as u32;
-    let high = (y as i16 as u16) as u32;
-    ((high << 16) | low) as LPARAM
-}
-
-#[cfg(target_os = "windows")]
-unsafe fn post_wheel_delta(hwnd: HWND, delta: i32, point_lparam: LPARAM) {
-    if hwnd.is_null() {
-        send_wheel_delta(delta);
-        return;
-    }
-
-    let wparam = (((delta as i16 as u16) as u32) << 16) as usize;
-    PostMessageW(hwnd, WM_MOUSEWHEEL, wparam, point_lparam);
 }
 
 fn wheel_delta_from_scroll(scroll_delta_y: i32) -> i32 {
