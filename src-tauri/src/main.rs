@@ -418,7 +418,9 @@ async fn step_long_capture(
     let mut changed = false;
     if !images_are_similar(&session.previous, &current) {
         if scroll_delta_y < 0 {
-            if let Some(scroll_offset) = find_upward_scroll_offset(&session.previous, &current) {
+            if let Some(scroll_offset) =
+                find_upward_scroll_offset(&session.previous, &current, scroll_delta_y)
+            {
                 let (fixed_top, _) = fixed_edge_bands(&session.previous, &current);
                 prepend_slice(&mut session.stitched, &current, scroll_offset, fixed_top)?;
                 session.previous = current;
@@ -429,7 +431,8 @@ async fn step_long_capture(
             } else {
                 session.unmatched_count += 1;
             }
-        } else if let Some(scroll_offset) = find_downward_scroll_offset(&session.previous, &current)
+        } else if let Some(scroll_offset) =
+            find_downward_scroll_offset(&session.previous, &current, scroll_delta_y)
         {
             let (_, fixed_bottom) = fixed_edge_bands(&session.previous, &current);
             append_slice(&mut session.stitched, &current, scroll_offset, fixed_bottom)?;
@@ -446,7 +449,7 @@ async fn step_long_capture(
     }
 
     let max_slices = session.request.max_slices.unwrap_or(60).clamp(2, 120);
-    let reached_edge = session.stalled_count >= 3 || session.unmatched_count >= 4;
+    let reached_edge = session.stalled_count >= 6;
     let finished = reached_edge || session.slices >= max_slices || session.stitched.height() > 96000;
 
     Ok(LongCaptureProgress {
@@ -837,18 +840,71 @@ fn sampled_row_diff(previous: &RgbaImage, current: &RgbaImage, y: u32) -> f64 {
     }
 }
 
-fn find_downward_scroll_offset(previous: &RgbaImage, current: &RgbaImage) -> Option<u32> {
+fn find_downward_scroll_offset(
+    previous: &RgbaImage,
+    current: &RgbaImage,
+    scroll_delta_y: i32,
+) -> Option<u32> {
     let height = previous.height().min(current.height());
     if height < 80 {
         return None;
     }
 
-    let max_shift = ((height as f32) * 0.82).round() as u32;
-    let min_shift = 8;
     let (fixed_top, fixed_bottom) = fixed_edge_bands(previous, current);
+    find_scroll_offset(
+        previous,
+        current,
+        scroll_delta_y,
+        fixed_top,
+        fixed_bottom,
+        |shift, top| (shift + top, top),
+    )
+}
+
+fn find_upward_scroll_offset(
+    previous: &RgbaImage,
+    current: &RgbaImage,
+    scroll_delta_y: i32,
+) -> Option<u32> {
+    let height = previous.height().min(current.height());
+    if height < 80 {
+        return None;
+    }
+
+    let (fixed_top, fixed_bottom) = fixed_edge_bands(previous, current);
+    find_scroll_offset(
+        previous,
+        current,
+        scroll_delta_y,
+        fixed_top,
+        fixed_bottom,
+        |shift, top| (top, shift + top),
+    )
+}
+
+fn find_scroll_offset<F>(
+    previous: &RgbaImage,
+    current: &RgbaImage,
+    scroll_delta_y: i32,
+    fixed_top: u32,
+    fixed_bottom: u32,
+    map_y: F,
+) -> Option<u32>
+where
+    F: Fn(u32, u32) -> (u32, u32),
+{
+    let height = previous.height().min(current.height());
+    if height < 80 {
+        return None;
+    }
+
+    let max_shift = ((height as f32) * 0.9).round() as u32;
+    let min_shift = (height / 10).clamp(18, 96).min(max_shift);
+    let expected_shift = expected_scroll_shift(height, scroll_delta_y).clamp(min_shift, max_shift);
     let mut best_shift = 0;
     let mut best_score = f64::MAX;
     let mut second_score = f64::MAX;
+    let mut best_weighted_score = f64::MAX;
     let mut shift = min_shift;
     while shift <= max_shift {
         let overlap = height
@@ -859,74 +915,47 @@ fn find_downward_scroll_offset(previous: &RgbaImage, current: &RgbaImage) -> Opt
             shift += 2;
             continue;
         }
-        let score = sampled_content_diff(
-            previous,
-            current,
-            shift + fixed_top,
-            fixed_top,
-            overlap,
-        );
+        let (previous_y, current_y) = map_y(shift, fixed_top);
+        let score = sampled_content_diff(previous, current, previous_y, current_y, overlap);
+        let target_distance = shift.abs_diff(expected_shift) as f64 / height.max(1) as f64;
+        let small_shift_penalty = if shift < height / 6 { 3.0 } else { 0.0 };
+        let weighted_score = score + target_distance * 4.0 + small_shift_penalty;
         if score < best_score {
             second_score = best_score;
             best_score = score;
-            best_shift = shift;
         } else if score < second_score {
             second_score = score;
+        }
+        if weighted_score < best_weighted_score {
+            best_weighted_score = weighted_score;
+            best_shift = shift;
         }
         shift += 2;
     }
 
-    if best_score <= 10.0 || (best_score <= 18.0 && second_score - best_score >= 0.8) {
+    let best_raw_score = {
+        let overlap = height
+            .saturating_sub(best_shift)
+            .saturating_sub(fixed_top)
+            .saturating_sub(fixed_bottom);
+        let (previous_y, current_y) = map_y(best_shift, fixed_top);
+        sampled_content_diff(previous, current, previous_y, current_y, overlap)
+    };
+
+    if best_shift > 0
+        && (best_raw_score <= 9.0
+            || (best_raw_score <= 16.0 && second_score - best_score >= 0.6))
+    {
         Some(best_shift)
     } else {
         None
     }
 }
 
-fn find_upward_scroll_offset(previous: &RgbaImage, current: &RgbaImage) -> Option<u32> {
-    let height = previous.height().min(current.height());
-    if height < 80 {
-        return None;
-    }
-
-    let max_shift = ((height as f32) * 0.82).round() as u32;
-    let min_shift = 8;
-    let (fixed_top, fixed_bottom) = fixed_edge_bands(previous, current);
-    let mut best_shift = 0;
-    let mut best_score = f64::MAX;
-    let mut second_score = f64::MAX;
-    let mut shift = min_shift;
-    while shift <= max_shift {
-        let overlap = height
-            .saturating_sub(shift)
-            .saturating_sub(fixed_top)
-            .saturating_sub(fixed_bottom);
-        if overlap < 24 {
-            shift += 2;
-            continue;
-        }
-        let score = sampled_content_diff(
-            previous,
-            current,
-            fixed_top,
-            shift + fixed_top,
-            overlap,
-        );
-        if score < best_score {
-            second_score = best_score;
-            best_score = score;
-            best_shift = shift;
-        } else if score < second_score {
-            second_score = score;
-        }
-        shift += 2;
-    }
-
-    if best_score <= 10.0 || (best_score <= 18.0 && second_score - best_score >= 0.8) {
-        Some(best_shift)
-    } else {
-        None
-    }
+fn expected_scroll_shift(height: u32, scroll_delta_y: i32) -> u32 {
+    let notches = ((scroll_delta_y.abs() as f32 / 120.0).ceil() as u32).clamp(1, 7);
+    let per_notch = (height / 3).clamp(80, 420);
+    (notches * per_notch).min(((height as f32) * 0.9).round() as u32)
 }
 
 fn sampled_diff(
