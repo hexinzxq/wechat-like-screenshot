@@ -125,6 +125,15 @@ struct LongCaptureProgress {
     preview_image_data_url: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct LongScrollMatch {
+    shift: u32,
+    fixed_top: u32,
+    fixed_bottom: u32,
+    score: f64,
+    distinct: f64,
+}
+
 struct DesktopCapture {
     image: RgbaImage,
     width: u32,
@@ -403,15 +412,15 @@ async fn step_long_capture(
     let step_app = app.clone();
     let capture_result = tauri::async_runtime::spawn_blocking(move || {
         let settle_time = if scroll_delta_y != 0 {
-            Duration::from_millis(120)
+            Duration::from_millis(52)
         } else {
-            Duration::from_millis(70)
+            Duration::from_millis(40)
         };
         sleep_for_long_capture(&step_app, generation, settle_time)?;
-        capture_stable_long_crop(&step_app, generation, &request)
+        capture_long_candidates(&step_app, generation, &request, 4, Duration::from_millis(32))
     })
     .await;
-    let current =
+    let candidates =
         capture_result.map_err(|error| AppError::Message(format!("长截图采集失败：{error}")))??;
 
     let mut session = state
@@ -427,41 +436,41 @@ async fn step_long_capture(
     }
 
     let mut changed = false;
-    if !images_are_similar(&session.previous, &current) {
+    if let Some((candidate_index, scroll_match)) =
+        choose_long_candidate(&session.previous, &candidates, scroll_delta_y)
+    {
+        let current = candidates[candidate_index].clone();
         if scroll_delta_y < 0 {
-            if let Some(scroll_offset) =
-                find_upward_scroll_offset(&session.previous, &current, scroll_delta_y)
-            {
-                let (fixed_top, _) = fixed_edge_bands(&session.previous, &current);
-                prepend_slice(&mut session.stitched, &current, scroll_offset, fixed_top)?;
-                session.previous = current;
-                session.slices += 1;
-                session.stalled_count = 0;
-                session.unmatched_count = 0;
-                changed = true;
-            } else {
-                session.unmatched_count += 1;
-            }
-        } else if let Some(scroll_offset) =
-            find_downward_scroll_offset(&session.previous, &current, scroll_delta_y)
-        {
-            let (_, fixed_bottom) = fixed_edge_bands(&session.previous, &current);
-            append_slice(&mut session.stitched, &current, scroll_offset, fixed_bottom)?;
-            session.previous = current;
-            session.slices += 1;
-            session.stalled_count = 0;
-            session.unmatched_count = 0;
-            changed = true;
+            prepend_slice(
+                &mut session.stitched,
+                &current,
+                scroll_match.shift,
+                scroll_match.fixed_top,
+            )?;
         } else {
-            session.unmatched_count += 1;
+            append_slice(
+                &mut session.stitched,
+                &current,
+                scroll_match.shift,
+                scroll_match.fixed_bottom,
+            )?;
         }
-    } else {
+        session.previous = current;
+        session.slices += 1;
+        session.stalled_count = 0;
+        session.unmatched_count = 0;
+        changed = true;
+    } else if candidates_are_still(&session.previous, &candidates) {
         session.stalled_count += 1;
+    } else {
+        session.unmatched_count += 1;
     }
 
     let max_slices = session.request.max_slices.unwrap_or(60).clamp(2, 120);
     let reached_edge = session.stalled_count >= 6;
-    let finished = reached_edge || session.slices >= max_slices || session.stitched.height() > 96000;
+    let too_many_unmatched = session.unmatched_count >= 8;
+    let finished =
+        reached_edge || too_many_unmatched || session.slices >= max_slices || session.stitched.height() > 96000;
 
     Ok(LongCaptureProgress {
         slices: session.slices,
@@ -766,43 +775,146 @@ fn sleep_for_long_capture(
     ensure_long_capture_active(app, generation)
 }
 
-fn capture_stable_long_crop(
+fn capture_long_candidates(
     app: &AppHandle,
     generation: u64,
     request: &LongCaptureRequest,
-) -> Result<RgbaImage, AppError> {
-    let mut previous: Option<RgbaImage> = None;
-    let mut stable_hits = 0;
-    let mut latest: Option<RgbaImage> = None;
+    count: usize,
+    interval: Duration,
+) -> Result<Vec<RgbaImage>, AppError> {
+    let mut candidates = Vec::with_capacity(count.max(1));
 
-    for _ in 0..7 {
+    for index in 0..count.max(1) {
         ensure_long_capture_active(app, generation)?;
         let desktop = capture_desktop_image()?;
-        let current = crop_desktop_area(
+        candidates.push(crop_desktop_area(
             &desktop.image,
             request.source_x,
             request.source_y,
             request.source_width,
             request.source_height,
-        )?;
-
-        if let Some(previous_crop) = previous.as_ref() {
-            if sampled_diff(previous_crop, &current, 0, 0, current.height()) < 1.6 {
-                stable_hits += 1;
-                if stable_hits >= 2 {
-                    return Ok(current);
-                }
-            } else {
-                stable_hits = 0;
-            }
+        )?);
+        if index + 1 < count {
+            sleep_for_long_capture(app, generation, interval)?;
         }
-
-        previous = Some(current.clone());
-        latest = Some(current);
-        sleep_for_long_capture(app, generation, Duration::from_millis(45))?;
     }
 
-    latest.ok_or_else(|| AppError::Message("长截图稳定帧采集失败".into()))
+    Ok(candidates)
+}
+
+fn choose_long_candidate(
+    previous: &RgbaImage,
+    candidates: &[RgbaImage],
+    scroll_delta_y: i32,
+) -> Option<(usize, LongScrollMatch)> {
+    if scroll_delta_y == 0 {
+        return None;
+    }
+
+    let upwards = scroll_delta_y < 0;
+    let mut best: Option<(usize, LongScrollMatch, f64)> = None;
+
+    for (index, current) in candidates.iter().enumerate() {
+        if previous.dimensions() != current.dimensions() || images_are_similar(previous, current) {
+            continue;
+        }
+
+        let Some(scroll_match) = find_long_scroll_match(previous, current, upwards) else {
+            continue;
+        };
+        let reliable = scroll_match.score <= 10.5
+            && (scroll_match.distinct >= 1.15 || scroll_match.score <= 5.8);
+        if !reliable {
+            continue;
+        }
+
+        let rank = scroll_match.score - scroll_match.distinct * 0.35 + index as f64 * 0.12;
+        if best
+            .as_ref()
+            .map(|(_, _, best_rank)| rank < *best_rank)
+            .unwrap_or(true)
+        {
+            best = Some((index, scroll_match, rank));
+        }
+    }
+
+    best.map(|(index, scroll_match, _)| (index, scroll_match))
+}
+
+fn candidates_are_still(previous: &RgbaImage, candidates: &[RgbaImage]) -> bool {
+    !candidates.is_empty()
+        && candidates
+            .iter()
+            .all(|candidate| images_are_similar(previous, candidate))
+}
+
+fn find_long_scroll_match(
+    previous: &RgbaImage,
+    current: &RgbaImage,
+    upwards: bool,
+) -> Option<LongScrollMatch> {
+    let height = previous.height().min(current.height());
+    if height < 80 {
+        return None;
+    }
+
+    let (fixed_top, fixed_bottom) = fixed_edge_bands(previous, current);
+    let min_shift = (height / 32).clamp(8, 64);
+    let max_shift = ((height as f32) * 0.88).round() as u32;
+    if min_shift >= max_shift {
+        return None;
+    }
+
+    let mut best_shift = 0;
+    let mut best_score = f64::MAX;
+    let mut second_score = f64::MAX;
+    let mut shift = min_shift;
+    while shift <= max_shift {
+        let overlap = height
+            .saturating_sub(shift)
+            .saturating_sub(fixed_top)
+            .saturating_sub(fixed_bottom);
+        if overlap >= 32 {
+            let (previous_y, current_y) = if upwards {
+                (fixed_top, shift + fixed_top)
+            } else {
+                (shift + fixed_top, fixed_top)
+            };
+            let score = scroll_overlap_score(previous, current, previous_y, current_y, overlap);
+            if score < best_score {
+                second_score = best_score;
+                best_score = score;
+                best_shift = shift;
+            } else if score < second_score {
+                second_score = score;
+            }
+        }
+        shift += if height > 900 { 3 } else { 2 };
+    }
+
+    if best_shift == 0 || !best_score.is_finite() {
+        return None;
+    }
+
+    Some(LongScrollMatch {
+        shift: best_shift,
+        fixed_top,
+        fixed_bottom,
+        score: best_score,
+        distinct: (second_score - best_score).max(0.0),
+    })
+}
+
+fn scroll_overlap_score(
+    previous: &RgbaImage,
+    current: &RgbaImage,
+    previous_y: u32,
+    current_y: u32,
+    height: u32,
+) -> f64 {
+    let pixel_score = sampled_content_diff(previous, current, previous_y, current_y, height);
+    let signature_score = sampled_row_signature_diff(previous, current, previous_y, current_y, height);
+    pixel_score * 0.82 + signature_score * 0.18
 }
 
 fn append_slice(
@@ -927,124 +1039,6 @@ fn sampled_row_diff(previous: &RgbaImage, current: &RgbaImage, y: u32) -> f64 {
     }
 }
 
-fn find_downward_scroll_offset(
-    previous: &RgbaImage,
-    current: &RgbaImage,
-    scroll_delta_y: i32,
-) -> Option<u32> {
-    let height = previous.height().min(current.height());
-    if height < 80 {
-        return None;
-    }
-
-    let (fixed_top, fixed_bottom) = fixed_edge_bands(previous, current);
-    find_scroll_offset(
-        previous,
-        current,
-        scroll_delta_y,
-        fixed_top,
-        fixed_bottom,
-        |shift, top| (shift + top, top),
-    )
-}
-
-fn find_upward_scroll_offset(
-    previous: &RgbaImage,
-    current: &RgbaImage,
-    scroll_delta_y: i32,
-) -> Option<u32> {
-    let height = previous.height().min(current.height());
-    if height < 80 {
-        return None;
-    }
-
-    let (fixed_top, fixed_bottom) = fixed_edge_bands(previous, current);
-    find_scroll_offset(
-        previous,
-        current,
-        scroll_delta_y,
-        fixed_top,
-        fixed_bottom,
-        |shift, top| (top, shift + top),
-    )
-}
-
-fn find_scroll_offset<F>(
-    previous: &RgbaImage,
-    current: &RgbaImage,
-    scroll_delta_y: i32,
-    fixed_top: u32,
-    fixed_bottom: u32,
-    map_y: F,
-) -> Option<u32>
-where
-    F: Fn(u32, u32) -> (u32, u32),
-{
-    let height = previous.height().min(current.height());
-    if height < 80 {
-        return None;
-    }
-
-    let max_shift = ((height as f32) * 0.9).round() as u32;
-    let min_shift = (height / 10).clamp(18, 96).min(max_shift);
-    let expected_shift = expected_scroll_shift(height, scroll_delta_y).clamp(min_shift, max_shift);
-    let mut best_shift = 0;
-    let mut best_score = f64::MAX;
-    let mut second_score = f64::MAX;
-    let mut best_weighted_score = f64::MAX;
-    let mut shift = min_shift;
-    while shift <= max_shift {
-        let overlap = height
-            .saturating_sub(shift)
-            .saturating_sub(fixed_top)
-            .saturating_sub(fixed_bottom);
-        if overlap < 24 {
-            shift += 2;
-            continue;
-        }
-        let (previous_y, current_y) = map_y(shift, fixed_top);
-        let score = sampled_content_diff(previous, current, previous_y, current_y, overlap);
-        let target_distance = shift.abs_diff(expected_shift) as f64 / height.max(1) as f64;
-        let small_shift_penalty = if shift < height / 6 { 3.0 } else { 0.0 };
-        let weighted_score = score + target_distance * 4.0 + small_shift_penalty;
-        if score < best_score {
-            second_score = best_score;
-            best_score = score;
-        } else if score < second_score {
-            second_score = score;
-        }
-        if weighted_score < best_weighted_score {
-            best_weighted_score = weighted_score;
-            best_shift = shift;
-        }
-        shift += 2;
-    }
-
-    let best_raw_score = {
-        let overlap = height
-            .saturating_sub(best_shift)
-            .saturating_sub(fixed_top)
-            .saturating_sub(fixed_bottom);
-        let (previous_y, current_y) = map_y(best_shift, fixed_top);
-        sampled_content_diff(previous, current, previous_y, current_y, overlap)
-    };
-
-    if best_shift > 0
-        && (best_raw_score <= 9.0
-            || (best_raw_score <= 16.0 && second_score - best_score >= 0.6))
-    {
-        Some(best_shift)
-    } else {
-        None
-    }
-}
-
-fn expected_scroll_shift(height: u32, scroll_delta_y: i32) -> u32 {
-    let notches = ((scroll_delta_y.abs() as f32 / 120.0).ceil() as u32).clamp(1, 7);
-    let per_notch = (height / 3).clamp(80, 420);
-    (notches * per_notch).min(((height as f32) * 0.9).round() as u32)
-}
-
 fn sampled_diff(
     previous: &RgbaImage,
     current: &RgbaImage,
@@ -1132,6 +1126,75 @@ fn sampled_content_diff(
         f64::MAX
     } else {
         total as f64 / count as f64
+    }
+}
+
+fn sampled_row_signature_diff(
+    previous: &RgbaImage,
+    current: &RgbaImage,
+    previous_y: u32,
+    current_y: u32,
+    height: u32,
+) -> f64 {
+    let width = previous.width().min(current.width());
+    if width < 16 || height < 16 {
+        return sampled_diff(previous, current, previous_y, current_y, height);
+    }
+
+    let margin_x = (width / 16).clamp(6, 48);
+    let content_width = width.saturating_sub(margin_x * 2).max(1);
+    let sample_x_step = (content_width / 64).max(1);
+    let sample_y_step = (height / 72).max(2);
+    let mut total = 0f64;
+    let mut count = 0f64;
+    let mut y = 0;
+
+    while y < height {
+        let py = previous_y + y;
+        let cy = current_y + y;
+        if py >= previous.height() || cy >= current.height() {
+            break;
+        }
+
+        let mut prev_luma = 0f64;
+        let mut curr_luma = 0f64;
+        let mut prev_gradient = 0f64;
+        let mut curr_gradient = 0f64;
+        let mut samples = 0f64;
+        let mut last_prev: Option<f64> = None;
+        let mut last_curr: Option<f64> = None;
+        let mut x = margin_x;
+        while x < margin_x + content_width {
+            let a = previous.get_pixel(x, py).0;
+            let b = current.get_pixel(x, cy).0;
+            let pa = a[0] as f64 * 0.299 + a[1] as f64 * 0.587 + a[2] as f64 * 0.114;
+            let cb = b[0] as f64 * 0.299 + b[1] as f64 * 0.587 + b[2] as f64 * 0.114;
+            prev_luma += pa;
+            curr_luma += cb;
+            if let Some(last) = last_prev {
+                prev_gradient += (pa - last).abs();
+            }
+            if let Some(last) = last_curr {
+                curr_gradient += (cb - last).abs();
+            }
+            last_prev = Some(pa);
+            last_curr = Some(cb);
+            samples += 1.0;
+            x += sample_x_step;
+        }
+
+        if samples > 0.0 {
+            total += ((prev_luma - curr_luma) / samples).abs();
+            total += ((prev_gradient - curr_gradient) / samples).abs() * 0.35;
+            count += 1.35;
+        }
+        y += sample_y_step;
+    }
+
+    if count == 0.0 {
+        f64::MAX
+    } else {
+        total / count
     }
 }
 

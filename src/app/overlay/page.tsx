@@ -207,8 +207,8 @@ export default function OverlayPage() {
   useEffect(() => {
     if (!longMode || !autoLongCapture || longBusy) return;
     const timer = window.setTimeout(() => {
-      queueLongCaptureStep(96);
-    }, 180);
+      queueLongCaptureStep(120);
+    }, 110);
     return () => window.clearTimeout(timer);
   }, [longMode, autoLongCapture, longBusy]);
 
