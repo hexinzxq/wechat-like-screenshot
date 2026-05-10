@@ -99,6 +99,8 @@ export default function OverlayPage() {
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const selectionBeforeDragRef = useRef<Rect | null>(null);
   const clickWindowRef = useRef<Rect | null>(null);
+  const pendingLongDeltaRef = useRef(0);
+  const longStepRunningRef = useRef(false);
 
   async function lockWindow(payload = capture) {
     if (!payload) return;
@@ -202,8 +204,8 @@ export default function OverlayPage() {
   useEffect(() => {
     if (!longMode || !autoLongCapture || longBusy) return;
     const timer = window.setTimeout(() => {
-      void stepLongCapture(120);
-    }, 80);
+      queueLongCaptureStep(96);
+    }, 180);
     return () => window.clearTimeout(timer);
   }, [longMode, autoLongCapture, longBusy]);
 
@@ -425,6 +427,8 @@ export default function OverlayPage() {
     setHoverWindow(null);
     setLongMode(true);
     setAutoLongCapture(false);
+    pendingLongDeltaRef.current = 0;
+    longStepRunningRef.current = false;
     setLongProgress(null);
     setLongPreviewUrl(null);
     setTool("select");
@@ -450,11 +454,11 @@ export default function OverlayPage() {
     }
   }
 
-  async function stepLongCapture(scrollDeltaY = 120) {
-    if (!longMode || longBusy) return;
+  async function runLongCaptureStep(scrollDeltaY = 120) {
+    if (!longMode || longStepRunningRef.current) return;
+    longStepRunningRef.current = true;
     setLongBusy(true);
     try {
-      await nextPaint();
       const progress = await invoke<LongCaptureProgress>("step_long_capture", {
         scrollDeltaY: Math.round(scrollDeltaY)
       });
@@ -474,12 +478,29 @@ export default function OverlayPage() {
       setAutoLongCapture(false);
       setNotice(String(error || "长截图采集失败"));
     } finally {
+      longStepRunningRef.current = false;
       setLongBusy(false);
+      const pendingDelta = pendingLongDeltaRef.current;
+      pendingLongDeltaRef.current = 0;
+      if (pendingDelta && longMode && !autoLongCapture) {
+        window.setTimeout(() => queueLongCaptureStep(pendingDelta), 20);
+      }
     }
   }
 
+  function queueLongCaptureStep(scrollDeltaY = 120) {
+    if (!longMode) return;
+    if (longStepRunningRef.current) {
+      pendingLongDeltaRef.current += scrollDeltaY;
+      pendingLongDeltaRef.current = Math.max(-720, Math.min(720, pendingLongDeltaRef.current));
+      return;
+    }
+    void runLongCaptureStep(scrollDeltaY);
+  }
+
   async function finishLongCapture() {
-    if (!capture || !longMode || longBusy) return;
+    if (!capture || !longMode) return;
+    pendingLongDeltaRef.current = 0;
     setLongBusy(true);
     setAutoLongCapture(false);
     try {
@@ -503,6 +524,8 @@ export default function OverlayPage() {
   }
 
   async function cancelLongCapture() {
+    pendingLongDeltaRef.current = 0;
+    longStepRunningRef.current = false;
     await invoke("cancel_long_capture").catch(() => undefined);
     setLongMode(false);
     setLongBusy(false);
@@ -520,10 +543,10 @@ export default function OverlayPage() {
     event.preventDefault();
     event.stopPropagation();
     if (event.deltaY < 0) {
-      void stepLongCapture(event.deltaY);
+      queueLongCaptureStep(event.deltaY);
       return;
     }
-    void stepLongCapture(event.deltaY || 120);
+    queueLongCaptureStep(event.deltaY || 120);
   }
 
   if (!capture) {
@@ -597,10 +620,10 @@ export default function OverlayPage() {
                   >
                     {autoLongCapture ? <Pause size={17} /> : <Play size={17} />}
                   </button>
-                  <button title="采集下一屏" disabled={longBusy} onClick={() => stepLongCapture(120)}>
+                  <button title="采集下一屏" disabled={longBusy} onClick={() => queueLongCaptureStep(120)}>
                     <ScrollText size={17} />
                   </button>
-                  <button title="完成长截图" disabled={longBusy} onClick={finishLongCapture}>
+                  <button title="完成长截图" onClick={finishLongCapture}>
                     <Check size={17} />
                   </button>
                   <button title="取消长截图" onClick={cancelLongCapture}>

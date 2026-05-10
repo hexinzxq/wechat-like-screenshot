@@ -29,8 +29,8 @@ use windows_sys::Win32::{
             SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT,
         },
         WindowsAndMessaging::{
-            EnumWindows, GetCursorPos, GetWindowRect, IsIconic, IsWindowVisible, SetCursorPos,
-            SetForegroundWindow, WindowFromPoint,
+            EnumWindows, GetCursorPos, GetWindowRect, IsIconic, IsWindowVisible, PostMessageW,
+            SetCursorPos, SetForegroundWindow, WindowFromPoint, WM_MOUSEWHEEL,
         },
     },
 };
@@ -380,13 +380,12 @@ async fn step_long_capture(
         )
     };
 
-    set_overlay_ignore_cursor(&app, true)?;
     let capture_result = tauri::async_runtime::spawn_blocking(move || {
         if scroll_delta_y != 0 {
             scroll_at_target(target_hwnd, cursor_x, cursor_y, scroll_delta_y);
-            std::thread::sleep(Duration::from_millis(170));
+            std::thread::sleep(Duration::from_millis(90));
         } else {
-            std::thread::sleep(Duration::from_millis(120));
+            std::thread::sleep(Duration::from_millis(70));
         }
 
         let desktop = capture_desktop_image()?;
@@ -399,7 +398,6 @@ async fn step_long_capture(
         )
     })
     .await;
-    let _ = set_overlay_ignore_cursor(&app, false);
     let current =
         capture_result.map_err(|error| AppError::Message(format!("长截图采集失败：{error}")))??;
 
@@ -442,7 +440,8 @@ async fn step_long_capture(
     }
 
     let max_slices = session.request.max_slices.unwrap_or(60).clamp(2, 120);
-    let finished = session.slices >= max_slices || session.stitched.height() > 96000;
+    let reached_edge = session.stalled_count >= 3 || session.unmatched_count >= 4;
+    let finished = reached_edge || session.slices >= max_slices || session.stitched.height() > 96000;
 
     Ok(LongCaptureProgress {
         slices: session.slices,
@@ -840,20 +839,38 @@ fn find_downward_scroll_offset(previous: &RgbaImage, current: &RgbaImage) -> Opt
 
     let max_shift = ((height as f32) * 0.82).round() as u32;
     let min_shift = 8;
+    let (fixed_top, fixed_bottom) = fixed_edge_bands(previous, current);
     let mut best_shift = 0;
     let mut best_score = f64::MAX;
+    let mut second_score = f64::MAX;
     let mut shift = min_shift;
     while shift <= max_shift {
-        let overlap = height - shift;
-        let score = sampled_content_diff(previous, current, shift, 0, overlap);
+        let overlap = height
+            .saturating_sub(shift)
+            .saturating_sub(fixed_top)
+            .saturating_sub(fixed_bottom);
+        if overlap < 24 {
+            shift += 2;
+            continue;
+        }
+        let score = sampled_content_diff(
+            previous,
+            current,
+            shift + fixed_top,
+            fixed_top,
+            overlap,
+        );
         if score < best_score {
+            second_score = best_score;
             best_score = score;
             best_shift = shift;
+        } else if score < second_score {
+            second_score = score;
         }
         shift += 2;
     }
 
-    if best_score <= 24.0 {
+    if best_score <= 10.0 || (best_score <= 18.0 && second_score - best_score >= 0.8) {
         Some(best_shift)
     } else {
         None
@@ -868,20 +885,38 @@ fn find_upward_scroll_offset(previous: &RgbaImage, current: &RgbaImage) -> Optio
 
     let max_shift = ((height as f32) * 0.82).round() as u32;
     let min_shift = 8;
+    let (fixed_top, fixed_bottom) = fixed_edge_bands(previous, current);
     let mut best_shift = 0;
     let mut best_score = f64::MAX;
+    let mut second_score = f64::MAX;
     let mut shift = min_shift;
     while shift <= max_shift {
-        let overlap = height - shift;
-        let score = sampled_content_diff(previous, current, 0, shift, overlap);
+        let overlap = height
+            .saturating_sub(shift)
+            .saturating_sub(fixed_top)
+            .saturating_sub(fixed_bottom);
+        if overlap < 24 {
+            shift += 2;
+            continue;
+        }
+        let score = sampled_content_diff(
+            previous,
+            current,
+            fixed_top,
+            shift + fixed_top,
+            overlap,
+        );
         if score < best_score {
+            second_score = best_score;
             best_score = score;
             best_shift = shift;
+        } else if score < second_score {
+            second_score = score;
         }
         shift += 2;
     }
 
-    if best_score <= 24.0 {
+    if best_score <= 10.0 || (best_score <= 18.0 && second_score - best_score >= 0.8) {
         Some(best_shift)
     } else {
         None
@@ -1027,22 +1062,22 @@ fn scroll_at_target(target_hwnd: isize, x: i32, y: i32, scroll_delta_y: i32) {
             focus_hwnd(hwnd);
         }
 
-        let mut restore_point = POINT { x, y };
-        let should_restore_cursor = GetCursorPos(&mut restore_point) != 0;
-        SetCursorPos(x, y);
-
         let direction = wheel_delta.signum();
         let notches = (wheel_delta.unsigned_abs() / 120).max(1) as i32;
 
         for index in 0..notches {
-            send_wheel_delta(direction * 120);
-            if index + 1 < notches {
-                std::thread::sleep(Duration::from_millis(28));
+            if hwnd.is_null() || !post_wheel_delta(hwnd, direction * 120, x, y) {
+                let mut restore_point = POINT { x, y };
+                let should_restore_cursor = GetCursorPos(&mut restore_point) != 0;
+                SetCursorPos(x, y);
+                send_wheel_delta(direction * 120);
+                if should_restore_cursor {
+                    SetCursorPos(restore_point.x, restore_point.y);
+                }
             }
-        }
-
-        if should_restore_cursor {
-            SetCursorPos(restore_point.x, restore_point.y);
+            if index + 1 < notches {
+                std::thread::sleep(Duration::from_millis(18));
+            }
         }
     }
 }
@@ -1066,6 +1101,13 @@ unsafe fn send_wheel_delta(delta: i32) {
         },
     };
     SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn post_wheel_delta(hwnd: HWND, delta: i32, x: i32, y: i32) -> bool {
+    let wparam = ((delta as i16 as u16 as u32) << 16) as usize;
+    let lparam = (((y as i16 as u16 as u32) << 16) | (x as i16 as u16 as u32)) as isize;
+    PostMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam) != 0
 }
 
 fn wheel_delta_from_scroll(scroll_delta_y: i32) -> i32 {
