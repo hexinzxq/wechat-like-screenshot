@@ -24,7 +24,7 @@ Alt + A
 
 按下后进入截图状态，可以框选区域、绘制矩形/圆形/箭头/画笔、输入文字、长截图、复制或保存截图。
 
-长截图现在是会话模式：框选后点击长截图，选区会保持在屏幕上；你可以在选区内手动滚动采集，也可以打开自动滚动，最后手动点击完成。
+长截图现在是手动滚动会话模式：框选后点击长截图，选区会保持在屏幕上；你在选区内每次手动滚动时都会同步采集并更新长图预览，最后手动点击完成。
 
 ## 注意
 
@@ -36,10 +36,10 @@ Windows 可能会提示未知发布者，因为这个演示程序没有做代码
 
 ```text
 wechat-like-screenshot-portable.exe
-B5918F272F50CDFD1138490B2117EB97D9FEFD8DD319C28D79CDADF00FD84524
+2B06AB4CFCAFA0A0027131EA16686E29ADB8CEC880C08AA46D335312A7FBA03F
 
 wechat-like-screenshot-setup.exe
-DE2A4895A83AAACBADDFAEA09E1B6696A15588DCE1F29E9EDCB2BA481D629D03
+1EA9836369448D5D960C382DA276AB66B2EF75D4DA882044C5D6769CC6241F81
 ```
 
 ## 开发签名

@@ -12,9 +12,7 @@ import {
   Clipboard,
   Eraser,
   MousePointer2,
-  Pause,
   PenLine,
-  Play,
   RectangleHorizontal,
   Save,
   Shapes,
@@ -94,7 +92,6 @@ export default function OverlayPage() {
   const [longMode, setLongMode] = useState(false);
   const [longBusy, setLongBusy] = useState(false);
   const [longSnapshotting, setLongSnapshotting] = useState(false);
-  const [autoLongCapture, setAutoLongCapture] = useState(false);
   const [longProgress, setLongProgress] = useState<LongCaptureProgress | null>(null);
   const [longPreviewUrl, setLongPreviewUrl] = useState<string | null>(null);
   const canvasRef = useRef<AnnotationCanvasHandle | null>(null);
@@ -163,7 +160,6 @@ export default function OverlayPage() {
     setLongMode(false);
     setLongBusy(false);
     setLongSnapshotting(false);
-    setAutoLongCapture(false);
     setLongProgress(null);
     setLongPreviewUrl(null);
     setNotice("");
@@ -203,14 +199,6 @@ export default function OverlayPage() {
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
   }, [longMode]);
-
-  useEffect(() => {
-    if (!longMode || !autoLongCapture || longBusy) return;
-    const timer = window.setTimeout(() => {
-      queueLongCaptureStep(120);
-    }, 110);
-    return () => window.clearTimeout(timer);
-  }, [longMode, autoLongCapture, longBusy]);
 
   const toolbarLayout = useMemo<ToolbarLayout | undefined>(() => {
     if (!selection) return undefined;
@@ -367,7 +355,6 @@ export default function OverlayPage() {
       setLongMode(false);
       setLongBusy(false);
       setLongSnapshotting(false);
-      setAutoLongCapture(false);
       setLongProgress(null);
       setLongPreviewUrl(null);
       canvasRef.current?.clear();
@@ -429,7 +416,6 @@ export default function OverlayPage() {
     canvasRef.current?.clear();
     setHoverWindow(null);
     setLongMode(true);
-    setAutoLongCapture(false);
     pendingLongDeltaRef.current = 0;
     pendingLongActionRef.current = null;
     longStepRunningRef.current = false;
@@ -462,24 +448,24 @@ export default function OverlayPage() {
     if (!longMode || longStepRunningRef.current) return;
     longStepRunningRef.current = true;
     setLongBusy(true);
+    const delta = Math.round(scrollDeltaY || 120);
     try {
+      await invoke("scroll_long_capture_view", { scrollDeltaY: delta });
       const progress = await invoke<LongCaptureProgress>("step_long_capture", {
-        scrollDeltaY: Math.round(scrollDeltaY)
+        scrollDeltaY: delta
       });
       setLongProgress(progress);
       if (progress.previewImageDataUrl) setLongPreviewUrl(progress.previewImageDataUrl);
       if (!progress.changed) {
-        setNotice("本次没有采集到可靠新内容，自动滚动会继续尝试");
+        setNotice("本次没有采集到可靠新内容，可以继续手动滚动");
       } else {
-        const direction = scrollDeltaY < 0 ? "上方" : "下方";
+        const direction = delta < 0 ? "上方" : "下方";
         setNotice(`长截图中：已采集${direction}内容，共 ${progress.slices} 屏`);
       }
       if (progress.finished) {
-        setAutoLongCapture(false);
         setNotice("已达到长截图保护上限，可以点完成生成长图");
       }
     } catch (error) {
-      setAutoLongCapture(false);
       const message = String(error || "长截图采集失败");
       if (!pendingLongActionRef.current && !message.includes("已停止")) {
         setNotice(message);
@@ -497,35 +483,38 @@ export default function OverlayPage() {
         window.setTimeout(() => void cancelLongCapture(), 0);
         return;
       }
-      const pendingDelta = pendingLongDeltaRef.current;
-      pendingLongDeltaRef.current = 0;
-      if (pendingDelta && longMode && !autoLongCapture) {
+      const pendingDelta = takePendingLongDelta();
+      if (pendingDelta && longMode) {
         window.setTimeout(() => queueLongCaptureStep(pendingDelta), 20);
       }
     }
   }
 
-  function queueLongCaptureStep(scrollDeltaY = 120) {
-    if (!longMode) return;
-    if (longStepRunningRef.current) {
-      pendingLongDeltaRef.current += scrollDeltaY;
-      pendingLongDeltaRef.current = Math.max(-720, Math.min(720, pendingLongDeltaRef.current));
-      return;
-    }
-    void runLongCaptureStep(scrollDeltaY);
+  function takePendingLongDelta() {
+    const pending = pendingLongDeltaRef.current;
+    if (!pending) return 0;
+    const direction = pending < 0 ? -1 : 1;
+    const next = direction * Math.min(120, Math.abs(pending));
+    const rest = pending - next;
+    pendingLongDeltaRef.current = Math.abs(rest) < 1 ? 0 : rest;
+    return next;
   }
 
-  function pauseLongCapture() {
-    pendingLongDeltaRef.current = 0;
-    void invoke("request_long_capture_stop").catch(() => undefined);
-    setAutoLongCapture(false);
-    setNotice("已暂停自动滚动");
+  function queueLongCaptureStep(scrollDeltaY = 120) {
+    if (!longMode) return;
+    const delta = Math.round(scrollDeltaY || 120);
+    if (longStepRunningRef.current) {
+      pendingLongDeltaRef.current += delta;
+      pendingLongDeltaRef.current = Math.max(-480, Math.min(480, pendingLongDeltaRef.current));
+      return;
+    }
+    const direction = delta < 0 ? -1 : 1;
+    void runLongCaptureStep(direction * Math.min(120, Math.abs(delta)));
   }
 
   async function finishLongCapture() {
     if (!capture || !longMode) return;
     pendingLongDeltaRef.current = 0;
-    setAutoLongCapture(false);
     if (longStepRunningRef.current) {
       pendingLongActionRef.current = "finish";
       void invoke("request_long_capture_stop").catch(() => undefined);
@@ -556,7 +545,6 @@ export default function OverlayPage() {
   async function cancelLongCapture() {
     pendingLongDeltaRef.current = 0;
     pendingLongActionRef.current = null;
-    setAutoLongCapture(false);
     if (longStepRunningRef.current) {
       pendingLongActionRef.current = "cancel";
       void invoke("cancel_long_capture").catch(() => undefined);
@@ -568,7 +556,6 @@ export default function OverlayPage() {
     setLongMode(false);
     setLongBusy(false);
     setLongSnapshotting(false);
-    setAutoLongCapture(false);
     setLongProgress(null);
     setLongPreviewUrl(null);
     setNotice("");
@@ -650,22 +637,6 @@ export default function OverlayPage() {
             >
               {longMode ? (
                 <>
-                  <button
-                    className={autoLongCapture ? "active" : ""}
-                    title={autoLongCapture ? "停止自动滚动" : "自动滚动"}
-                    disabled={longBusy && !autoLongCapture}
-                    onClick={() => {
-                      if (autoLongCapture) {
-                        pauseLongCapture();
-                      } else {
-                        pendingLongDeltaRef.current = 0;
-                        pendingLongActionRef.current = null;
-                        setAutoLongCapture(true);
-                      }
-                    }}
-                  >
-                    {autoLongCapture ? <Pause size={17} /> : <Play size={17} />}
-                  </button>
                   <button title="采集下一屏" disabled={longBusy} onClick={() => queueLongCaptureStep(120)}>
                     <ScrollText size={17} />
                   </button>
