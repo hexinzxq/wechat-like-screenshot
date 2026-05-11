@@ -307,10 +307,15 @@ async fn begin_scroll_capture(
 
 #[tauri::command]
 async fn step_scroll_capture(
+    app: AppHandle,
     request: ScrollCaptureRequest,
     scroll_delta_y: i32,
 ) -> Result<ScrollCaptureFrame, AppError> {
     let request = normalize_scroll_request(request);
+    if scroll_delta_y != 0 {
+        set_overlay_ignore_cursor(&app, true)?;
+    }
+
     let capture_result = tauri::async_runtime::spawn_blocking(move || {
         let target_hwnd = request
             .target_hwnd
@@ -319,6 +324,7 @@ async fn step_scroll_capture(
             .unwrap_or_else(|| target_window_at(request.cursor_x, request.cursor_y));
         if scroll_delta_y != 0 {
             focus_hwnd(target_hwnd);
+            std::thread::sleep(Duration::from_millis(35));
             send_wheel_delta(scroll_delta_y);
             std::thread::sleep(Duration::from_millis(95));
         }
@@ -326,6 +332,10 @@ async fn step_scroll_capture(
         Ok::<_, AppError>((image, hwnd_to_isize(target_hwnd)))
     })
     .await;
+
+    if scroll_delta_y != 0 {
+        let _ = set_overlay_ignore_cursor(&app, false);
+    }
 
     let (image, target_hwnd) =
         capture_result.map_err(|error| AppError::Message(format!("scroll capture failed: {error}")))??;
