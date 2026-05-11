@@ -40,6 +40,10 @@ body {
   pointer-events: none;
 }
 
+.capture-image.framed {
+  inset: auto;
+}
+
 .annotation-canvas {
   z-index: 4;
 }
@@ -290,6 +294,20 @@ body {
   opacity: 0.38;
 }
 
+.toolbar .scroll-control {
+  display: none;
+}
+
+.scroll-mode .toolbar > button,
+.scroll-mode .toolbar > input,
+.scroll-mode .toolbar > .divider {
+  display: none;
+}
+
+.scroll-mode .toolbar > .scroll-control {
+  display: grid;
+}
+
 .toolbar .divider {
   width: 1px;
   height: 22px;
@@ -330,6 +348,43 @@ body {
 
 .notice {
   bottom: 26px;
+}
+
+.scroll-preview {
+  position: absolute;
+  z-index: 7;
+  width: 184px;
+  max-height: 300px;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(16, 20, 22, 0.92);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  color: #eef4f5;
+  pointer-events: none;
+}
+
+.scroll-preview-title,
+.scroll-preview-meta {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.scroll-preview-title {
+  color: #32d296;
+}
+
+.scroll-preview-meta {
+  color: rgba(238, 244, 245, 0.72);
+}
+
+.scroll-preview img {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  margin: 5px 0;
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .text-draft {

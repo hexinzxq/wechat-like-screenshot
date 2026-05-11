@@ -18,6 +18,7 @@ export type AnnotationCanvasHandle = {
 type Props = {
   image: HTMLImageElement | null;
   imageDataUrl: string;
+  imageFrame?: Rect | null;
   showImage?: boolean;
   selection: Rect | null;
   tool: AnnotationTool;
@@ -127,6 +128,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
   {
     image,
     imageDataUrl,
+    imageFrame,
     showImage = true,
     selection,
     tool,
@@ -173,7 +175,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
     () => ({
       async exportSelection() {
         if (!selection || !image) return null;
-        const frame = {
+        const frame = imageFrame ?? {
           x: 0,
           y: 0,
           width: Math.max(1, window.innerWidth),
@@ -260,7 +262,7 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
         excalidrawRef.current?.clear();
       }
     }),
-    [image, selection, shapes, tool]
+    [image, imageFrame, selection, shapes, tool]
   );
 
   function pointerPoint(event: React.PointerEvent<HTMLCanvasElement>) {
@@ -335,10 +337,20 @@ export const AnnotationCanvas = forwardRef<AnnotationCanvasHandle, Props>(functi
       {showImage && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          className="capture-image"
+          className={`capture-image${imageFrame ? " framed" : ""}`}
           src={imageDataUrl}
           alt=""
           draggable={false}
+          style={
+            imageFrame
+              ? {
+                  left: imageFrame.x,
+                  top: imageFrame.y,
+                  width: imageFrame.width,
+                  height: imageFrame.height
+                }
+              : undefined
+          }
         />
       )}
       <canvas

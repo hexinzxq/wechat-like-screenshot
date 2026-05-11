@@ -22,7 +22,7 @@ Windows 安装包版本，适合安装到系统后长期使用。
 Alt + A
 ```
 
-按下后进入截图状态，可以框选区域、绘制矩形/圆形/箭头/画笔、输入文字、复制或保存截图。
+按下后进入截图状态，可以框选区域、绘制矩形/菱形/圆形/箭头/画笔、输入文字、手动滚动长截图、复制或保存截图。
 
 ## 注意
 
@@ -34,10 +34,10 @@ Windows 可能会提示未知发布者，因为这个演示程序使用的是本
 
 ```text
 wechat-like-screenshot-portable.exe
-013A88CAB7A2B9279107CB6482AC5E07EEDA7F665E8850E87D594823BF726D90
+01F2029242619761C74536E91465509F430304A0DB8E1FEE1560EA8642936D85
 
 wechat-like-screenshot-setup.exe
-2B204C840DD6EC8431A328E6B1554E789A7BB271472C9EF65984D85EEAD3E805
+D43319B3A0ECDBA935488EDB85DDA58B55D0A987C50D670F9BD15E482D8A8309
 ```
 
 ## 开发签名
