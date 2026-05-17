@@ -4,6 +4,10 @@
 
 如果你要移植长截图能力，请看：[长截图功能移植教程](docs/scroll-screenshot-migration-guide.md)。
 
+如果你要了解 Windows 安装包如何处理 WebView2 Runtime，请看：[Windows WebView2 打包到安装包说明](docs/windows-webview2-bundling-guide.md)。
+
+如果你要了解如何最终打出 Windows 安装程序版安装包，请看：[Windows 安装程序版打包流程](docs/windows-installer-packaging-guide.md)。
+
 这份说明只讲一件事：如果你想把本项目里的截图标注/绘图功能移植到别的 React 项目里，应该拷哪些文件、看哪些方法、怎么最快跑起来。
 
 项目整体是 Tauri + Next.js + React，但绘图功能本身主要在前端，和 Tauri 的关系不大。你要移植绘图能力时，优先看 `src/components/capture/AnnotationCanvas.tsx` 和 `src/app/overlay/page.tsx`。
